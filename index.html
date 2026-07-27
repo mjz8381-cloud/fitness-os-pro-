@@ -710,7 +710,7 @@ async function initCloud(){
   sb.auth.onAuthStateChange(async(event,session)=>{
     sbUser=session?session.user:null;
     if(event==='SIGNED_IN'&&sbUser){ await cloudPull(); await save(); guestMode=false; }
-    render();
+    try{ render(); }catch(e){ console.error('Render error (auth change):',e); document.getElementById('view').innerHTML='<div style="padding:40px;text-align:center;color:#fff">حصل خطأ — جرب امسح بيانات الموقع وافتح تاني</div>'; }
   });
 }
 let tt; function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');
@@ -853,5 +853,4 @@ function scheduleToday(){
       if(cfg.enabled&&cfg.hasTime&&cfg.time) scheduleAtHHMM(cfg.time,()=>maybeFireMealNotif(cat));
     });
   }
-  if(ns.dailyLog.enabled) scheduleAtHHMM(ns.dailyLog.time, fireDailyLogNotif);
-  if(ns.tomorrowPrep.enab
+  if(ns.dailyLog.enabled
