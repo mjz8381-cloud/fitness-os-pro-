@@ -1116,11 +1116,6 @@ function lastSession(exId){
 }
 
 /* ================= PROGRESS ENGINE ================= */
-const PROGRESS_WEIGHTS={
-  cut:   {training:.25, nutrition:.35, body:.30, consistency:.10},
-  bulk:  {training:.40, nutrition:.30, body:.20, consistency:.10},
-  recomp:{training:.33, nutrition:.32, body:.25, consistency:.10}
-};
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 function periodDates(period){
   const end=new Date(); end.setHours(0,0,0,0);
@@ -1130,156 +1125,109 @@ function periodDates(period){
   while(d<=end){days.push(dstr(d));d.setDate(d.getDate()+1);}
   return {start,end,days,len};
 }
-function prevPeriodDates(period){
-  const {start,len}=periodDates(period);
-  const pEnd=new Date(start); pEnd.setDate(pEnd.getDate()-1);
-  const pStart=new Date(pEnd); pStart.setDate(pEnd.getDate()-(len-1));
-  const days=[]; let d=new Date(pStart);
-  while(d<=pEnd){days.push(dstr(d));d.setDate(d.getDate()+1);}
-  return {start:pStart,end:pEnd,days};
-}
-function volumeForDays(days){
-  const set=new Set(days);
-  return S.workoutLogs.filter(l=>set.has(l.date)).reduce((s,l)=>s+(l.weight||0)*(l.reps||0),0);
-}
-function computeTraining(days,prevDays){
+
+/* --- 1) التمرين: تمارين اتسجلت فعليًا ÷ تمارين مفروضة، + سعرات محروقة في الفترة --- */
+function computeTraining(days){
   const trainDays=days.filter(ds=>isTrainingDay(ds));
-  const doneDays=trainDays.filter(ds=>S.workoutLogs.some(l=>l.date===ds));
-  const adherencePct=trainDays.length?Math.round(doneDays.length/trainDays.length*100):100;
-  let plannedEx=0,doneEx=0;
-  doneDays.forEach(ds=>{
+  let plannedEx=0, doneEx=0, burned=0;
+  days.forEach(ds=>{
+    burned+=burnedOn(ds);
+    if(!isTrainingDay(ds)) return;
     const dow=new Date(ds+'T00:00:00').getDay();
     const sess=sessionFor(dow);
-    if(!sess||sess.rest)return;
+    if(!sess||sess.rest) return;
     plannedEx+=sess.exercises.length;
     doneEx+=sess.exercises.filter(id=>S.workoutLogs.some(l=>l.date===ds&&l.exerciseId===id)).length;
   });
-  const exercisePct=plannedEx?Math.round(doneEx/plannedEx*100):(doneDays.length?100:0);
-  const volNow=volumeForDays(days), volPrev=volumeForDays(prevDays);
-  const volDeltaPct=volPrev?Math.round((volNow-volPrev)/volPrev*100):null;
-  const trendScore=volPrev?clamp(50+((volNow-volPrev)/volPrev)*150,0,100):(volNow>0?75:50);
-  // score = quality of days you DID train (exercises done + volume trend).
-  // "did you show up?" is the Consistency ring's job.
-  const score=doneDays.length?Math.round(exercisePct*0.55+trendScore*0.45):0;
-  return {score,adherencePct,exercisePct,volNow:Math.round(volNow),volPrev:Math.round(volPrev),volDeltaPct,
-    doneDays:doneDays.length,trainDays:trainDays.length};
+  const score=plannedEx?Math.round(clamp(doneEx/plannedEx*100,0,100)):0;
+  return {score,doneEx,plannedEx,trainDays:trainDays.length,burned:Math.round(burned)};
 }
+
+/* --- 2) التغذية: % من هدف السعرات المحقق، + إجمالي كالوري/بروتين/كارب/دهون فعلي --- */
 function computeNutrition(days){
-  let qualityScores=[],kcalSum=0,proteinSum=0,targetKcalSum=0,targetProteinSum=0,loggedDays=0;
-  const ds0=today();
+  let kcalSum=0,proteinSum=0,carbSum=0,fatSum=0,targetKcalSum=0,loggedDays=0;
   days.forEach(ds=>{
     const t=targetFor(ds), tot=foodTotals(ds);
-    const hasLog=S.foodLogs.some(l=>l.date===ds);
-    targetKcalSum+=t.kcal;targetProteinSum+=t.protein;
-    if(!hasLog) return;
+    targetKcalSum+=t.kcal;
+    if(!S.foodLogs.some(l=>l.date===ds)) return;
     loggedDays++;
-    kcalSum+=tot.k;proteinSum+=tot.p;
-    const isToday=ds===ds0;
-    const kcalRatio=t.kcal?tot.k/t.kcal:1;
-    let kcalScore;
-    if(isToday){
-      kcalScore=kcalRatio<=1.0?clamp(kcalRatio*100,0,100):clamp(100-(kcalRatio-1)*120,0,100);
-    }else{
-      kcalScore=clamp(100-Math.abs(1-kcalRatio)*120,0,100);
-    }
-    const proteinRatio=t.protein?tot.p/t.protein:1;
-    const proteinScore=isToday?clamp(proteinRatio*100,0,100):clamp(100-Math.abs(1-proteinRatio)*100,0,100);
-    qualityScores.push(Math.round(kcalScore*0.45+proteinScore*0.55));
+    kcalSum+=tot.k;proteinSum+=tot.p;carbSum+=tot.c;fatSum+=tot.f;
   });
-  // score = quality of LOGGED days only.
-  // "how many days did you log?" is the Consistency ring's job — not here.
-  const score=qualityScores.length?Math.round(qualityScores.reduce((a,b)=>a+b,0)/qualityScores.length):0;
-  const todayTot=foodTotals(ds0), todayTarget=targetFor(ds0);
-  return {score,avgKcal:loggedDays?Math.round(kcalSum/loggedDays):0,avgProtein:loggedDays?Math.round(proteinSum/loggedDays):0,
-    targetKcal:Math.round(targetKcalSum/days.length),targetProtein:Math.round(targetProteinSum/days.length),
-    loggedDays,totalDays:days.length,
-    todayKcal:todayTot.k,todayProtein:todayTot.p,todayTargetKcal:todayTarget.kcal,todayTargetProtein:todayTarget.protein};
+  // score = من إجمالي هدف السعرات في الفترة، قد إيه فعليًا حققت (متغطاش أكتر من 100%)
+  const score=targetKcalSum?Math.round(clamp(kcalSum/targetKcalSum*100,0,100)):0;
+  return {score,kcal:Math.round(kcalSum),protein:Math.round(proteinSum),carbs:Math.round(carbSum),fat:Math.round(fatSum),
+    targetKcal:Math.round(targetKcalSum),loggedDays,totalDays:days.length};
 }
-function computeBody(days){
+
+/* --- 3) الجسم: طاقة داخلة (أكل) مقابل طاقة خارجة (تمرين وحرق) + ماكروز الفترة --- */
+function computeBody(days,nutrition,training){
   const ms=S.metrics.slice().sort((a,b)=>a.date.localeCompare(b.date));
-  if(!ms.length) return {score:50,hasData:false,note:'لسه ما سجّلتش أي قياس — سجّل وزنك في تبويب السجل عشان الدايرة دي تشتغل'};
-  if(ms.length===1){
-    // قياس واحد بس — نوريه كنقطة بداية، والدايرة بتتحرك أول ما يتسجل قياس تاني
-    return {score:50,hasData:true,singlePoint:true,weightNow:ms[0].weight,avg7:ms[0].weight,
-      weightChange:0,waistChange:null,armChange:null,
-      note:'ده أول قياس ليك — سجّل قياس تاني (بعد كام يوم) عشان نقدر نحسب الاتجاه'};
-  }
-  // نحدد فترة المقارنة حسب التبويب المختار (يوم/أسبوع/شهر) بدل ما تكون ثابتة دايمًا على 30 يوم،
-  // عشان الدايرة فعلاً تفرق باختلاف الفلتر بدل ما تفضل زي بعضها
-  const end=days&&days.length?new Date(days[days.length-1]+'T00:00:00'):new Date();
-  end.setHours(0,0,0,0);
-  const lenDays=days?days.length:30;
-  const lookbackStart=new Date(end); lookbackStart.setDate(end.getDate()-(lenDays-1));
-  const lookStr=dstr(lookbackStart);
-  // baseline = أقرب قياس لبداية الفترة (أو أول قياس عندنا لو كل القياسات بعد بداية الفترة)
-  const baseline=ms.find(m=>m.date>=lookStr)||ms[0];
-  // latest = أقرب قياس لنهاية الفترة (مش شرط يكون آخر قياس مسجل لو الفترة "يوم" مثلاً)
-  const inRange=ms.filter(m=>m.date<=dstr(end));
-  const latest=inRange.length?inRange[inRange.length-1]:ms[ms.length-1];
-  if(latest.date===baseline.date){
-    // مفيش قياسين مختلفين جوه نفس الفترة دي — نرجع لأقرب قياسين متاحين عمومًا
-    const b2=ms[0], l2=ms[ms.length-1];
-    if(b2.date===l2.date) return {score:50,hasData:true,singlePoint:true,weightNow:l2.weight,avg7:l2.weight,
-      weightChange:0,waistChange:null,armChange:null,note:'محتاج قياس تاني في يوم مختلف عشان نحسب الاتجاه'};
-    return computeBodyFromPoints(b2,l2,ms,end);
-  }
-  return computeBodyFromPoints(baseline,latest,ms,end);
-}
-function computeBodyFromPoints(baseline,latest,ms,end){
-  const last7=ms.filter(m=>(end-new Date(m.date+'T00:00:00'))/86400000<=6 && new Date(m.date+'T00:00:00')<=end);
-  const avg7=last7.length?+(last7.reduce((s,m)=>s+m.weight,0)/last7.length).toFixed(1):latest.weight;
-  const weightChange=+(latest.weight-baseline.weight).toFixed(1);
-  const waistChange=(baseline.waist!=null&&latest.waist!=null)?+(latest.waist-baseline.waist).toFixed(1):null;
-  const armChange=(baseline.arm!=null&&latest.arm!=null)?+(latest.arm-baseline.arm).toFixed(1):null;
   const goal=S.profile.goal;
+  // هدف السعرات للفترة (نفس الأرقام اللي التغذية شغالة عليها)
+  let targetKcalSum=0; days.forEach(ds=>{ targetKcalSum+=targetFor(ds).kcal; });
+  const kcalIn=nutrition.kcal, kcalOut=training.burned;
+  const netVsTarget=nutrition.targetKcal?kcalIn-nutrition.targetKcal:0;
+  // score: هل صافي الطاقة (أكل - حرق) بيتماشى مع هدفك؟ بنستخدم *نسبة* الفرق من الهدف
+  // (مش رقم مطلق) عشان السكور يفضل عادل بغض النظر عن طول الفترة (يوم/أسبوع/شهر)
   let score=60;
-  if(goal==='cut'){
-    score=weightChange<-0.1?85:weightChange<=0?65:35;
-    if(waistChange!=null) score=clamp(score+(waistChange<0?10:-10),0,100);
-  }else if(goal==='bulk'){
-    score=(weightChange>0.1&&weightChange<2.5)?85:weightChange>=0?60:35;
-  }else{
-    score=Math.abs(weightChange)<=0.6?75:50;
-    if(waistChange!=null&&waistChange<0)score=clamp(score+15,0,100);
+  const tgt=nutrition.targetKcal||1;
+  const pctOff=netVsTarget/tgt*100; // + يعني فائض، - يعني عجز، كنسبة من الهدف
+  if(nutrition.loggedDays===0){
+    score=0;
+  } else if(goal==='cut'){
+    // عايزين عجز خفيف لمتوسط؛ عجز كبير أوي (>25%) مش صحي، وفائض بيبعدك عن الهدف
+    score=pctOff<=0?clamp(85+pctOff*0.3,40,90):clamp(85-pctOff*3,0,90);
+  } else if(goal==='bulk'){
+    // عايزين فائض خفيف (0-15%)؛ عجز أو فائض زيادة كلاهما بعيد عن الهدف
+    score=(pctOff>=0&&pctOff<=15)?90:clamp(70-Math.abs(pctOff-7.5)*3,0,90);
+  } else {
+    // شد عام: كل ما قربت من صفر كل ما أحسن
+    score=clamp(90-Math.abs(pctOff)*3,0,90);
   }
-  return {score:Math.round(score),hasData:true,weightNow:latest.weight,avg7,weightChange,waistChange,armChange,
-    baselineDate:baseline.date,latestDate:latest.date};
+  score=Math.round(clamp(score,0,100));
+  // اتجاه الوزن لو فيه قياسات كفاية (معلومة إضافية بس مش أساس السكور)
+  let weightTrend=null;
+  if(ms.length>=2){
+    const end=days&&days.length?new Date(days[days.length-1]+'T00:00:00'):new Date();
+    const lookbackStart=new Date(end); lookbackStart.setDate(end.getDate()-(days.length-1));
+    const lookStr=dstr(lookbackStart);
+    const baseline=ms.find(m=>m.date>=lookStr)||ms[0];
+    const inRange=ms.filter(m=>m.date<=dstr(end));
+    const latest=inRange.length?inRange[inRange.length-1]:ms[ms.length-1];
+    if(latest.date!==baseline.date) weightTrend={change:+(latest.weight-baseline.weight).toFixed(1),weightNow:latest.weight};
+  }
+  return {score,kcalIn,kcalOut,netVsTarget:Math.round(netVsTarget),
+    protein:nutrition.protein,carbs:nutrition.carbs,fat:nutrition.fat,
+    targetKcal:nutrition.targetKcal,loggedDays:nutrition.loggedDays,totalDays:days.length,
+    weightTrend,hasData:nutrition.loggedDays>0};
 }
+
+/* --- 4) تطورك (الاستمرارية سابقًا): التزام التسجيل مقابل الإجمالي المطلوب --- */
 function computeConsistency(days){
+  // "مطلوب منه" = يوم فيه تمرين (لازم يسجل تمرين) + يوم عادي (لازم يسجل أكل على الأقل)
+  let required=0, done=0;
+  days.forEach(ds=>{
+    const mustTrain=isTrainingDay(ds);
+    const trained=S.workoutLogs.some(l=>l.date===ds);
+    const logged=S.foodLogs.some(l=>l.date===ds);
+    if(mustTrain){ required++; if(trained) done++; }
+    required++; if(logged) done++; // كل يوم مطلوب فيه تسجيل أكل
+  });
+  const score=required?Math.round(clamp(done/required*100,0,100)):0;
   const foodDays=days.filter(ds=>S.foodLogs.some(l=>l.date===ds)).length;
-  const workoutDays=days.filter(ds=>S.workoutLogs.some(l=>l.date===ds)).length;
-  const metricDays=days.filter(ds=>S.metrics.some(m=>m.date===ds)).length;
-  const loggedDays=days.filter(ds=>S.workoutLogs.some(l=>l.date===ds)||S.foodLogs.some(l=>l.date===ds)||S.metrics.some(m=>m.date===ds)).length;
-  const loggingPct=days.length?Math.round(loggedDays/days.length*100):0;
   const trainDays=days.filter(ds=>isTrainingDay(ds));
   const trainDone=trainDays.filter(ds=>S.workoutLogs.some(l=>l.date===ds)).length;
-  const trainAdherencePct=trainDays.length?Math.round(trainDone/trainDays.length*100):100;
-  const foodCoveragePct=days.length?Math.round(foodDays/days.length*100):0;
-  const trainDaysWithPref=days.filter(ds=>{
-    const dow=new Date(ds+'T00:00:00').getDay();
-    return isTrainingDay(ds)&&S.gymTimePref&&S.gymTimePref[dow];
-  });
-  let gymPct=null;
-  if(trainDaysWithPref.length){
-    const followed=trainDaysWithPref.filter(ds=>S.workoutLogs.some(l=>l.date===ds));
-    gymPct=Math.round(followed.length/trainDaysWithPref.length*100);
-  }
-  const score=gymPct!=null?Math.round(loggingPct*0.4+trainAdherencePct*0.3+gymPct*0.3)
-    :Math.round(loggingPct*0.5+trainAdherencePct*0.5);
-  return {score,loggingPct,loggedDays,totalDays:days.length,gymPct,
-    foodDays,workoutDays,metricDays,trainAdherencePct,foodCoveragePct,
-    trainDone,trainTotal:trainDays.length};
+  return {score,done,required,foodDays,totalDays:days.length,trainDone,trainTotal:trainDays.length};
 }
+
 function progressEngine(period){
-  const cur=periodDates(period), prevR=prevPeriodDates(period);
-  const training=computeTraining(cur.days,prevR.days);
+  const cur=periodDates(period);
+  const training=computeTraining(cur.days);
   const nutrition=computeNutrition(cur.days);
-  const body=computeBody(cur.days);
+  const body=computeBody(cur.days,nutrition,training);
   const consistency=computeConsistency(cur.days);
   const goal=S.profile.goal;
-  const w=PROGRESS_WEIGHTS[goal]||PROGRESS_WEIGHTS.recomp;
-  const composite=Math.round(training.score*w.training+nutrition.score*w.nutrition+body.score*w.body+consistency.score*w.consistency);
-  return {period,cur,training,nutrition,body,consistency,composite:clamp(composite,0,100),goal,weights:w};
+  return {period,cur,training,nutrition,body,consistency,goal};
 }
 /* ================= ROUTER ================= */
 let lastRenderedTab=null;
@@ -1615,7 +1563,7 @@ function renderHome(){
   ${(()=>{ const pe=progressEngine('week');
     return `<div class="st">📊 تقدمك <span class="tag">آخر 7 أيام</span></div>
     <div class="card">
-      <div class="row" data-a="openprogress" style="cursor:pointer"><strong style="font-size:13px">التقدم</strong><span class="chip c-lime">${pe.composite}/100</span></div>
+      <div class="row" data-a="openprogress" style="cursor:pointer"><strong style="font-size:13px">التقدم</strong><span style="color:var(--faint2);font-size:12px">التفاصيل ›</span></div>
       <div class="mrings" style="margin-top:12px">
         ${RING_DEFS.map(r=>`<button class="mringbtn" data-a="openring" data-k="${r.k}" style="color:${r.c}">
           <div class="mring" data-ring="${pe[r.k].score}" data-rcolor="${r.c}"><div class="mv">0</div></div>
@@ -1995,7 +1943,7 @@ const RING_DEFS=[
   {k:'training',  label:'التمرين',  icon:'🏋️', c:'var(--lime)'},
   {k:'nutrition', label:'التغذية',  icon:'🍽',  c:'var(--cyan)'},
   {k:'body',      label:'الجسم',    icon:'⚖️', c:'var(--violet)'},
-  {k:'consistency',label:'الاستمرارية',icon:'📋',c:'var(--amber)'}
+  {k:'consistency',label:'تطورك',   icon:'📋',c:'var(--amber)'}
 ];
 function subbar(label,pct,val,color){
   const p=clamp(Math.round(pct),0,100);
@@ -2004,107 +1952,71 @@ function subbar(label,pct,val,color){
     <div class="sv">${val}</div></div>`;
 }
 function ringTier(s){return s>=80?'ممتاز 🔥':s>=60?'كويس 👍':s>=40?'شد حيلك 💪':s<10?'ابدأ سجّل 📝':'يلا نرجع بقوة';}
+function periodLabel(period){return period==='day'?'النهارده':period==='week'?'آخر 7 أيام':'آخر 30 يوم';}
 
-function renderNutritionDetail(pe){
-  const n=pe.nutrition, d=RING_DEFS[1];
-  const ds=today(), pool=allFoods();
-  const todayLogs=S.foodLogs.filter(l=>l.date===ds);
-  const todayPct=n.todayTargetKcal?Math.round(n.todayKcal/n.todayTargetKcal*100):0;
-  const remaining=Math.max(0,n.todayTargetKcal-n.todayKcal);
-  const pRemain=Math.max(0,n.todayTargetProtein-n.todayProtein);
-  // logged meals list — same data as food page
-  const mealList=todayLogs.length?todayLogs.map(l=>{
-    const m=pool.find(x=>x.id===l.mealId); if(!m) return '';
-    return `<div class="li"><div><div class="n">${m.name}</div>
-      <div class="m">${m.cat} • ${Math.round(m.kcal*l.qty)} سعرة • ${Math.round(m.p*l.qty)}جم بروتين</div></div></div>`;
-  }).join(''):`<div class="empty" style="padding:14px">لسه ما سجّلت أكل النهارده</div>`;
-
-  return `<div class="card">
-    <div class="row"><div class="tt">${d.icon} أكل النهارده</div>
-      <span class="chip" style="color:${d.c};border-color:${d.c}">${todayPct}%</span></div>
-    ${subbar('سعرات',todayPct,n.todayKcal+'/'+n.todayTargetKcal,d.c)}
-    ${subbar('بروتين',n.todayTargetProtein?n.todayProtein/n.todayTargetProtein*100:0,n.todayProtein+'/'+n.todayTargetProtein+'جم',d.c)}
-    ${remaining>0?`<div class="dd" style="margin-top:8px">متبقي <strong>${remaining}</strong> سعرة و<strong>${pRemain}</strong>جم بروتين</div>`
-      :`<div class="dd" style="margin-top:8px;color:var(--lime)">وصلت لهدفك ✅</div>`}
-  </div>
-  <div class="card flush"><div style="padding:4px 12px">${mealList}</div></div>
-  ${n.loggedDays>1?`<div class="card">
-    <div class="tt">متوسط الأيام المسجّلة (${n.loggedDays} يوم)</div>
-    ${subbar('سعرات',n.targetKcal?n.avgKcal/n.targetKcal*100:0,n.avgKcal+'/'+n.targetKcal,d.c)}
-    ${subbar('بروتين',n.targetProtein?n.avgProtein/n.targetProtein*100:0,n.avgProtein+'/'+n.targetProtein+'جم',d.c)}
-  </div>`:''}`;
-}
-
+/* --- 1) التمرين --- */
 function renderTrainingDetail(pe){
   const t=pe.training, d=RING_DEFS[0];
-  const ds=today(), dow=new Date().getDay();
-  const sess=sessionFor(dow);
-  // today's exercises — same data as plan page
-  let todayHtml='';
-  if(sess&&!sess.rest){
-    const doneIds=new Set(S.workoutLogs.filter(l=>l.date===ds).map(l=>l.exerciseId));
-    const done=sess.exercises.filter(id=>doneIds.has(id)).length;
-    todayHtml=`<div class="card">
-      <div class="row"><div class="tt">${d.icon} حصة النهارده: ${sess.name}</div>
-        <span class="chip" style="color:${d.c};border-color:${d.c}">${done}/${sess.exercises.length}</span></div>
-      ${subbar('التمارين',sess.exercises.length?done/sess.exercises.length*100:0,done+'/'+sess.exercises.length,d.c)}
-      <div style="margin-top:10px">
-        ${sess.exercises.map(id=>{
-          const e=EX_BY_ID[id]; if(!e) return '';
-          const isDone=doneIds.has(id);
-          const logs=S.workoutLogs.filter(l=>l.date===ds&&l.exerciseId===id);
-          const vol=logs.reduce((s,l)=>s+(l.weight||0)*(l.reps||0),0);
-          return `<div class="li"><div><div class="n">${isDone?'✅':'⬜'} ${e.name}</div>
-            <div class="m">${e.muscle} • ${e.equipment}${isDone&&vol?' • '+vol+'كجم حمل':''}</div></div></div>`;
-        }).join('')}
-      </div>
-    </div>`;
-  } else {
-    todayHtml=`<div class="card"><div class="empty" style="padding:14px">😴 النهارده يوم راحة</div></div>`;
-  }
-  return todayHtml+`<div class="card">
-    <div class="tt">الفترة دي</div>
-    ${t.trainDays===0
-      ?`<div class="dd" style="margin-top:6px">الفترة دي كانت كلها أيام راحة — مفيش تمارين مجدولة نقيسها.</div>`
-      :subbar('الالتزام بالأيام',t.adherencePct,t.doneDays+'/'+t.trainDays+' يوم',d.c)}
-    ${t.trainDays>0?subbar('تنفيذ التمارين',t.exercisePct,t.exercisePct+'%',d.c):''}
-    ${t.doneDays>0?subbar('حجم الحمل',t.volDeltaPct!=null?clamp(50+t.volDeltaPct,0,100):50,t.volNow.toLocaleString('en-US')+'كجم',d.c):''}
-    ${t.doneDays===0?`<div class="dd" style="margin-top:8px">لسه ما سجّلتش أوزان في أي حصة الفترة دي — سجّل مجموعاتك في تبويب البرنامج عشان حجم الحمل يتحسب</div>`
-      :t.volDeltaPct!=null?`<div class="dd" style="margin-top:8px">حجم التمرين ${t.volDeltaPct>=0?'زاد ↑':'نزل ↓'} ${Math.abs(t.volDeltaPct)}% عن الفترة اللي فاتت</div>`:
-      `<div class="dd" style="margin-top:8px">لسه مفيش فترة سابقة نقارن بيها — قارن هيظهر أول ما يعدي فترة كاملة تانية</div>`}
+  return `<div class="card">
+    <div class="row"><div class="tt">${d.icon} إنجاز التمارين — ${periodLabel(pe.period)}</div>
+      <span class="chip" style="color:${d.c};border-color:${d.c}">${t.score}/100</span></div>
+    ${t.plannedEx>0?subbar('تمارين اتسجلت',t.score,t.doneEx+'/'+t.plannedEx,d.c)
+      :`<div class="dd" style="margin-top:6px">مفيش تمارين مجدولة في الفترة دي (كلها أيام راحة).</div>`}
+    <div class="dd" style="margin-top:8px">🔥 سعرات محروقة من التمرين: <strong>${t.burned}</strong> سعرة</div>
   </div>`;
 }
 
+/* --- 2) التغذية --- */
+function renderNutritionDetail(pe){
+  const n=pe.nutrition, d=RING_DEFS[1];
+  return `<div class="card">
+    <div class="row"><div class="tt">${d.icon} التغذية — ${periodLabel(pe.period)}</div>
+      <span class="chip" style="color:${d.c};border-color:${d.c}">${n.score}/100</span></div>
+    ${n.targetKcal>0?subbar('سعرات اتاكلت',n.score,n.kcal+'/'+n.targetKcal,d.c)
+      :`<div class="dd" style="margin-top:6px">مفيش هدف سعرات محسوب للفترة دي.</div>`}
+    <div class="dd" style="margin-top:6px">سجّلت أكل في ${n.loggedDays} من ${n.totalDays} يوم</div>
+    <div class="div"></div>
+    <div class="g3">
+      <div style="text-align:center"><div class="num" style="font-size:16px">${n.protein}جم</div><div class="dd">بروتين</div></div>
+      <div style="text-align:center"><div class="num" style="font-size:16px">${n.carbs}جم</div><div class="dd">كارب</div></div>
+      <div style="text-align:center"><div class="num" style="font-size:16px">${n.fat}جم</div><div class="dd">دهون</div></div>
+    </div>
+  </div>`;
+}
+
+/* --- 3) الجسم --- */
 function renderBodyDetail(pe){
   const b=pe.body, d=RING_DEFS[2];
-  if(!b.hasData) return `<div class="card"><div class="empty"><div class="b">⚖️</div>${b.note}</div>
-    <button class="btn p blk" data-a="go" data-t="log" style="margin-top:10px">سجّل وزنك دلوقتي</button></div>`;
-  if(b.singlePoint) return `<div class="card">
-    <div class="row"><div class="tt">${d.icon} وزنك الحالي</div>
-      <span class="chip" style="color:${d.c};border-color:${d.c}">${b.weightNow}كجم</span></div>
-    <div class="dd" style="margin-top:8px">${b.note}</div>
-  </div>`;
-  const periodLbl=pe.period==='day'?'اليوم':pe.period==='week'?'آخر 7 أيام':'آخر 30 يوم';
+  if(!b.hasData) return `<div class="card"><div class="empty"><div class="b">⚖️</div>لسه ما سجّلتش أكل في الفترة دي، فمينفعش نحسب طاقة داخلة ولا خارجة.</div>
+    <button class="btn p blk" data-a="go" data-t="food" style="margin-top:10px">سجّل أكل دلوقتي</button></div>`;
+  const netTxt=b.netVsTarget===0?'بالظبط على الهدف':(b.netVsTarget>0?`فائض +${b.netVsTarget} سعرة عن هدفك`:`عجز ${Math.abs(b.netVsTarget)} سعرة عن هدفك`);
   return `<div class="card">
-    <div class="row"><div class="tt">${d.icon} اتجاه الجسم (${periodLbl})</div>
-      <span class="chip" style="color:${d.c};border-color:${d.c}">${b.weightNow}كجم</span></div>
-    ${subbar('الوزن',clamp(50+b.weightChange*-12*(pe.goal==='bulk'?-1:1),0,100),
-      (b.weightChange>=0?'+':'')+b.weightChange+'كجم',d.c)}
-    ${b.waistChange!=null?subbar('الخصر',clamp(50+b.waistChange*-8,0,100),(b.waistChange>=0?'+':'')+b.waistChange+'سم',d.c):''}
-    ${b.armChange!=null?subbar('الذراع',clamp(50+b.armChange*8,0,100),(b.armChange>=0?'+':'')+b.armChange+'سم',d.c):''}
-    <div class="dd" style="margin-top:8px">من ${b.baselineDate} لحد ${b.latestDate} • متوسط 7 أيام: ${b.avg7}كجم</div>
+    <div class="row"><div class="tt">${d.icon} طاقة الجسم — ${periodLabel(pe.period)}</div>
+      <span class="chip" style="color:${d.c};border-color:${d.c}">${b.score}/100</span></div>
+    <div class="li"><div><div class="n">🍽 طاقة داخلة (أكل)</div></div><span class="num" style="font-size:16px">${b.kcalIn} سعرة</span></div>
+    <div class="li"><div><div class="n">🔥 طاقة خارجة (تمرين)</div></div><span class="num" style="font-size:16px">${b.kcalOut} سعرة</span></div>
+    <div class="li"><div><div class="n">هدفك السعراتي</div><div class="m">${GOALS[pe.goal].label}</div></div><span class="num" style="font-size:16px">${b.targetKcal} سعرة</span></div>
+    <div class="dd" style="margin-top:8px">${netTxt}</div>
+    <div class="div"></div>
+    <div class="g3">
+      <div style="text-align:center"><div class="num" style="font-size:16px">${b.protein}جم</div><div class="dd">بروتين</div></div>
+      <div style="text-align:center"><div class="num" style="font-size:16px">${b.carbs}جم</div><div class="dd">كارب</div></div>
+      <div style="text-align:center"><div class="num" style="font-size:16px">${b.fat}جم</div><div class="dd">دهون</div></div>
+    </div>
+    ${b.weightTrend?`<div class="dd" style="margin-top:8px">الوزن ${b.weightTrend.change>0?'زاد':b.weightTrend.change<0?'نزل':'ثابت'} ${b.weightTrend.change!==0?Math.abs(b.weightTrend.change)+'كجم':''} خلال الفترة دي (دلوقتي ${b.weightTrend.weightNow}كجم)</div>`:''}
   </div>`;
 }
 
+/* --- 4) تطورك --- */
 function renderConsistencyDetail(pe){
   const c=pe.consistency, d=RING_DEFS[3];
   return `<div class="card">
-    <div class="row"><div class="tt">${d.icon} الاستمرارية</div>
+    <div class="row"><div class="tt">${d.icon} تطورك — ${periodLabel(pe.period)}</div>
       <span class="chip" style="color:${d.c};border-color:${d.c}">${c.score}/100</span></div>
-    ${subbar('تسجيل أكل',c.foodCoveragePct,c.foodDays+'/'+c.totalDays+' يوم',d.c)}
-    ${subbar('أيام تمرين',c.trainAdherencePct,c.trainDone+'/'+c.trainTotal+' يوم',d.c)}
-    ${c.gymPct!=null?subbar('التزام بمعاد الجيم',c.gymPct,c.gymPct+'%',d.c):''}
-    ${subbar('إجمالي أيام نشطة',c.loggingPct,c.loggedDays+'/'+c.totalDays,d.c)}
+    ${subbar('التزام عام',c.score,c.done+'/'+c.required,d.c)}
+    <div class="div"></div>
+    <div class="li"><div><div class="n">تسجيل الأكل</div></div><span class="chip">${c.foodDays}/${c.totalDays} يوم</span></div>
+    ${c.trainTotal>0?`<div class="li"><div><div class="n">حضور أيام التمرين</div></div><span class="chip">${c.trainDone}/${c.trainTotal} يوم</span></div>`:''}
   </div>`;
 }
 
@@ -2114,7 +2026,6 @@ function renderProgress(){
   const tabsHtml=`<div class="tabs">${periods.map(([k,l])=>`<button class="tb ${progPeriod===k?'on':''}" data-a="progperiod" data-k="${k}">${l}</button>`).join('')}</div>`;
   const selDef=RING_DEFS.find(r=>r.k===progRing);
   const selScore=pe[progRing].score;
-  const periodLbl=progPeriod==='day'?'النهارده':progPeriod==='week'?'آخر 7 أيام':'آخر 30 يوم';
 
   const detailMap={
     training:renderTrainingDetail(pe),
@@ -2123,30 +2034,16 @@ function renderProgress(){
     consistency:renderConsistencyDetail(pe)
   };
 
-  const w=pe.weights;
-  const contribHtml=RING_DEFS.map(r=>{
-    const contrib=Math.round(pe[r.k].score*w[r.k]);
-    return `<div class="li"><div><div class="n">${r.icon} ${r.label}</div>
-      <div class="m">${pe[r.k].score}/100 × وزن ${Math.round(w[r.k]*100)}%</div></div>
-      <span class="num" style="font-size:15px">${contrib}</span></div>`;
-  }).join('');
-
   return `<button class="btn g sm" data-a="back" style="margin:6px 0 12px">‹ رجوع</button>
-  <div class="st">تقدمك <span class="tag">${GOALS[pe.goal].label} • ${periodLbl}</span></div>
+  <div class="st">تقدمك <span class="tag">${GOALS[pe.goal].label} • ${periodLabel(progPeriod)}</span></div>
   ${tabsHtml}
   <div class="card hero">
     <div class="ringw"><div class="ring" data-ring="${selScore}" data-rcolor="${selDef.c}"><div class="ri">
       <div class="v mv">${selScore}</div><div class="l">${selDef.label}</div></div></div></div>
     <div class="hs">
       <div class="hr"><span class="k">${selDef.label}</span><span class="v" style="color:${selDef.c}">${ringTier(selScore)}</span></div>
-      <span class="chip" style="margin-top:4px">إجمالي: ${pe.composite}/100</span>
     </div>
   </div>
-  <div class="card flush"><div style="padding:10px 12px 4px">
-    <div class="dd" style="margin-bottom:6px">الإجمالي بيتحسب من الأربع دواير دي، كل واحدة بوزن مختلف حسب هدفك (${GOALS[pe.goal].label}):</div>
-    <div style="padding:0 4px">${contribHtml}</div>
-    <div class="dd" style="margin-top:6px;padding-bottom:6px">مجموع المساهمات = ${pe.composite}/100</div>
-  </div></div>
   <div class="card">
     <div class="mrings">
       ${RING_DEFS.map(r=>`<button class="mringbtn ${progRing===r.k?'sel':''}" data-a="progring" data-k="${r.k}" style="color:${r.c}">
