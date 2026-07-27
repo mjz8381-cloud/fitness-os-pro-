@@ -276,7 +276,7 @@
 <script>
 /* ============ CLOUD SYNC (Supabase) ============ */
 const SUPABASE_URL='https://iiqjfvdtyzirqkcunmjb.supabase.co';
-const SUPABASE_ANON_KEY='sb_publishable_YCgaj4BuC6yzWqm_9V14eg_yH99S-OY';
+const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpcWpmdmR0eXppcnFrY3VubWpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUxNzA3MjcsImV4cCI6MjEwMDc0NjcyN30.yOPop9sXLBUecM-sMYvieFB65apc8R7Xi5pmfVVggUE';
 const _wantsCloud = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('YOUR_');
 let CLOUD_ENABLED=false, sb=null;
 let sbUser=null, guestMode=false, syncState='idle', authMode='login', authErr='';
