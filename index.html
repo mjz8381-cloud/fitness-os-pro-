@@ -277,7 +277,7 @@
 <script>
 /* ============ CLOUD SYNC (Supabase) ============ */
 const SUPABASE_URL='https://iiqjfvdtyzirqkcunmjb.supabase.co';
-const SUPABASE_ANON_KEY='sb_publishable_YCgaj4BuC6yzWqm_9V14eg_yH99S-OY';
+const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpcWpmdmR0eXppcnFrY3VubWpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUxNzA3MjcsImV4cCI6MjEwMDc0NjcyN30.yOPop9sXLBUecM-sMYvieFB65apc8R7Xi5pmfVVggUE';
 const CLOUD_ENABLED = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('YOUR_') && typeof window.supabase!=='undefined';
 let sb=null;
 try{ if(CLOUD_ENABLED) sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY); }catch(e){ console.error('Supabase init failed:',e); }
@@ -1195,18 +1195,38 @@ function computeNutrition(days){
     loggedDays,totalDays:days.length,
     todayKcal:todayTot.k,todayProtein:todayTot.p,todayTargetKcal:todayTarget.kcal,todayTargetProtein:todayTarget.protein};
 }
-function computeBody(){
+function computeBody(days){
   const ms=S.metrics.slice().sort((a,b)=>a.date.localeCompare(b.date));
-  if(ms.length<2) return {score:50,hasData:false,note:'سجّل قياسات أكتر عشان نقدر نحسب اتجاه حقيقي'};
-  // body progress always looks at a fixed ~30 day trend, independent of the
-  // day/week/month tab — bodyweight moves too slowly for a "daily" comparison
-  // to mean anything, so tying it to the period tab just made it look frozen.
-  const now=new Date(); now.setHours(0,0,0,0);
-  const lookbackStart=new Date(now); lookbackStart.setDate(now.getDate()-29);
+  if(!ms.length) return {score:50,hasData:false,note:'لسه ما سجّلتش أي قياس — سجّل وزنك في تبويب السجل عشان الدايرة دي تشتغل'};
+  if(ms.length===1){
+    // قياس واحد بس — نوريه كنقطة بداية، والدايرة بتتحرك أول ما يتسجل قياس تاني
+    return {score:50,hasData:true,singlePoint:true,weightNow:ms[0].weight,avg7:ms[0].weight,
+      weightChange:0,waistChange:null,armChange:null,
+      note:'ده أول قياس ليك — سجّل قياس تاني (بعد كام يوم) عشان نقدر نحسب الاتجاه'};
+  }
+  // نحدد فترة المقارنة حسب التبويب المختار (يوم/أسبوع/شهر) بدل ما تكون ثابتة دايمًا على 30 يوم،
+  // عشان الدايرة فعلاً تفرق باختلاف الفلتر بدل ما تفضل زي بعضها
+  const end=days&&days.length?new Date(days[days.length-1]+'T00:00:00'):new Date();
+  end.setHours(0,0,0,0);
+  const lenDays=days?days.length:30;
+  const lookbackStart=new Date(end); lookbackStart.setDate(end.getDate()-(lenDays-1));
   const lookStr=dstr(lookbackStart);
+  // baseline = أقرب قياس لبداية الفترة (أو أول قياس عندنا لو كل القياسات بعد بداية الفترة)
   const baseline=ms.find(m=>m.date>=lookStr)||ms[0];
-  const latest=ms[ms.length-1];
-  const last7=ms.filter(m=>(now-new Date(m.date+'T00:00:00'))/86400000<=6);
+  // latest = أقرب قياس لنهاية الفترة (مش شرط يكون آخر قياس مسجل لو الفترة "يوم" مثلاً)
+  const inRange=ms.filter(m=>m.date<=dstr(end));
+  const latest=inRange.length?inRange[inRange.length-1]:ms[ms.length-1];
+  if(latest.date===baseline.date){
+    // مفيش قياسين مختلفين جوه نفس الفترة دي — نرجع لأقرب قياسين متاحين عمومًا
+    const b2=ms[0], l2=ms[ms.length-1];
+    if(b2.date===l2.date) return {score:50,hasData:true,singlePoint:true,weightNow:l2.weight,avg7:l2.weight,
+      weightChange:0,waistChange:null,armChange:null,note:'محتاج قياس تاني في يوم مختلف عشان نحسب الاتجاه'};
+    return computeBodyFromPoints(b2,l2,ms,end);
+  }
+  return computeBodyFromPoints(baseline,latest,ms,end);
+}
+function computeBodyFromPoints(baseline,latest,ms,end){
+  const last7=ms.filter(m=>(end-new Date(m.date+'T00:00:00'))/86400000<=6 && new Date(m.date+'T00:00:00')<=end);
   const avg7=last7.length?+(last7.reduce((s,m)=>s+m.weight,0)/last7.length).toFixed(1):latest.weight;
   const weightChange=+(latest.weight-baseline.weight).toFixed(1);
   const waistChange=(baseline.waist!=null&&latest.waist!=null)?+(latest.waist-baseline.waist).toFixed(1):null;
@@ -1221,9 +1241,9 @@ function computeBody(){
   }else{
     score=Math.abs(weightChange)<=0.6?75:50;
     if(waistChange!=null&&waistChange<0)score=clamp(score+15,0,100);
-
   }
-  return {score:Math.round(score),hasData:true,weightNow:latest.weight,avg7,weightChange,waistChange,armChange};
+  return {score:Math.round(score),hasData:true,weightNow:latest.weight,avg7,weightChange,waistChange,armChange,
+    baselineDate:baseline.date,latestDate:latest.date};
 }
 function computeConsistency(days){
   const foodDays=days.filter(ds=>S.foodLogs.some(l=>l.date===ds)).length;
@@ -1254,7 +1274,7 @@ function progressEngine(period){
   const cur=periodDates(period), prevR=prevPeriodDates(period);
   const training=computeTraining(cur.days,prevR.days);
   const nutrition=computeNutrition(cur.days);
-  const body=computeBody();
+  const body=computeBody(cur.days);
   const consistency=computeConsistency(cur.days);
   const goal=S.profile.goal;
   const w=PROGRESS_WEIGHTS[goal]||PROGRESS_WEIGHTS.recomp;
@@ -1595,7 +1615,7 @@ function renderHome(){
   ${(()=>{ const pe=progressEngine('week');
     return `<div class="st">📊 تقدمك <span class="tag">آخر 7 أيام</span></div>
     <div class="card">
-      <div class="row" data-a="openprogress" style="cursor:pointer"><strong style="font-size:13px">السكور الأسبوعي</strong><span class="chip c-lime">${pe.composite}/100</span></div>
+      <div class="row" data-a="openprogress" style="cursor:pointer"><strong style="font-size:13px">التقدم</strong><span class="chip c-lime">${pe.composite}/100</span></div>
       <div class="mrings" style="margin-top:12px">
         ${RING_DEFS.map(r=>`<button class="mringbtn" data-a="openring" data-k="${r.k}" style="color:${r.c}">
           <div class="mring" data-ring="${pe[r.k].score}" data-rcolor="${r.c}"><div class="mv">0</div></div>
@@ -2044,25 +2064,35 @@ function renderTrainingDetail(pe){
   }
   return todayHtml+`<div class="card">
     <div class="tt">الفترة دي</div>
-    ${subbar('الالتزام بالأيام',t.adherencePct,t.adherencePct+'%',d.c)}
-    ${subbar('تنفيذ التمارين',t.exercisePct,t.exercisePct+'%',d.c)}
-    ${subbar('حجم الحمل',t.volDeltaPct!=null?clamp(50+t.volDeltaPct,0,100):50,t.volNow.toLocaleString('en-US')+'كجم',d.c)}
-    ${t.volDeltaPct!=null?`<div class="dd" style="margin-top:8px">حجم التمرين ${t.volDeltaPct>=0?'زاد ↑':'نزل ↓'} ${Math.abs(t.volDeltaPct)}% عن الفترة اللي فاتت</div>`:
-      `<div class="dd" style="margin-top:8px">لسه مفيش فترة سابقة نقارن بيها</div>`}
+    ${t.trainDays===0
+      ?`<div class="dd" style="margin-top:6px">الفترة دي كانت كلها أيام راحة — مفيش تمارين مجدولة نقيسها.</div>`
+      :subbar('الالتزام بالأيام',t.adherencePct,t.doneDays+'/'+t.trainDays+' يوم',d.c)}
+    ${t.trainDays>0?subbar('تنفيذ التمارين',t.exercisePct,t.exercisePct+'%',d.c):''}
+    ${t.doneDays>0?subbar('حجم الحمل',t.volDeltaPct!=null?clamp(50+t.volDeltaPct,0,100):50,t.volNow.toLocaleString('en-US')+'كجم',d.c):''}
+    ${t.doneDays===0?`<div class="dd" style="margin-top:8px">لسه ما سجّلتش أوزان في أي حصة الفترة دي — سجّل مجموعاتك في تبويب البرنامج عشان حجم الحمل يتحسب</div>`
+      :t.volDeltaPct!=null?`<div class="dd" style="margin-top:8px">حجم التمرين ${t.volDeltaPct>=0?'زاد ↑':'نزل ↓'} ${Math.abs(t.volDeltaPct)}% عن الفترة اللي فاتت</div>`:
+      `<div class="dd" style="margin-top:8px">لسه مفيش فترة سابقة نقارن بيها — قارن هيظهر أول ما يعدي فترة كاملة تانية</div>`}
   </div>`;
 }
 
 function renderBodyDetail(pe){
   const b=pe.body, d=RING_DEFS[2];
-  if(!b.hasData) return `<div class="card"><div class="empty"><div class="b">⚖️</div>${b.note}</div></div>`;
+  if(!b.hasData) return `<div class="card"><div class="empty"><div class="b">⚖️</div>${b.note}</div>
+    <button class="btn p blk" data-a="go" data-t="log" style="margin-top:10px">سجّل وزنك دلوقتي</button></div>`;
+  if(b.singlePoint) return `<div class="card">
+    <div class="row"><div class="tt">${d.icon} وزنك الحالي</div>
+      <span class="chip" style="color:${d.c};border-color:${d.c}">${b.weightNow}كجم</span></div>
+    <div class="dd" style="margin-top:8px">${b.note}</div>
+  </div>`;
+  const periodLbl=pe.period==='day'?'اليوم':pe.period==='week'?'آخر 7 أيام':'آخر 30 يوم';
   return `<div class="card">
-    <div class="row"><div class="tt">${d.icon} اتجاه الجسم (30 يوم)</div>
+    <div class="row"><div class="tt">${d.icon} اتجاه الجسم (${periodLbl})</div>
       <span class="chip" style="color:${d.c};border-color:${d.c}">${b.weightNow}كجم</span></div>
     ${subbar('الوزن',clamp(50+b.weightChange*-12*(pe.goal==='bulk'?-1:1),0,100),
       (b.weightChange>=0?'+':'')+b.weightChange+'كجم',d.c)}
     ${b.waistChange!=null?subbar('الخصر',clamp(50+b.waistChange*-8,0,100),(b.waistChange>=0?'+':'')+b.waistChange+'سم',d.c):''}
     ${b.armChange!=null?subbar('الذراع',clamp(50+b.armChange*8,0,100),(b.armChange>=0?'+':'')+b.armChange+'سم',d.c):''}
-    <div class="dd" style="margin-top:8px">متوسط 7 أيام: ${b.avg7}كجم</div>
+    <div class="dd" style="margin-top:8px">من ${b.baselineDate} لحد ${b.latestDate} • متوسط 7 أيام: ${b.avg7}كجم</div>
   </div>`;
 }
 
@@ -2093,6 +2123,14 @@ function renderProgress(){
     consistency:renderConsistencyDetail(pe)
   };
 
+  const w=pe.weights;
+  const contribHtml=RING_DEFS.map(r=>{
+    const contrib=Math.round(pe[r.k].score*w[r.k]);
+    return `<div class="li"><div><div class="n">${r.icon} ${r.label}</div>
+      <div class="m">${pe[r.k].score}/100 × وزن ${Math.round(w[r.k]*100)}%</div></div>
+      <span class="num" style="font-size:15px">${contrib}</span></div>`;
+  }).join('');
+
   return `<button class="btn g sm" data-a="back" style="margin:6px 0 12px">‹ رجوع</button>
   <div class="st">تقدمك <span class="tag">${GOALS[pe.goal].label} • ${periodLbl}</span></div>
   ${tabsHtml}
@@ -2104,6 +2142,11 @@ function renderProgress(){
       <span class="chip" style="margin-top:4px">إجمالي: ${pe.composite}/100</span>
     </div>
   </div>
+  <div class="card flush"><div style="padding:10px 12px 4px">
+    <div class="dd" style="margin-bottom:6px">الإجمالي بيتحسب من الأربع دواير دي، كل واحدة بوزن مختلف حسب هدفك (${GOALS[pe.goal].label}):</div>
+    <div style="padding:0 4px">${contribHtml}</div>
+    <div class="dd" style="margin-top:6px;padding-bottom:6px">مجموع المساهمات = ${pe.composite}/100</div>
+  </div></div>
   <div class="card">
     <div class="mrings">
       ${RING_DEFS.map(r=>`<button class="mringbtn ${progRing===r.k?'sel':''}" data-a="progring" data-k="${r.k}" style="color:${r.c}">
