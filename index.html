@@ -197,25 +197,9 @@
 
   /* ---------- AI coach chat ---------- */
   .chatlog{display:flex;flex-direction:column;gap:10px;padding:6px 2px 14px}
-  .msg{max-width:82%;padding:10px 13px;border-radius:14px;font-size:13.5px;line-height:1.7;white-space:pre-wrap}
+  .msg{max-width:82%;padding:10px 13px;border-radius:14px;font-size:13.5px;line-height:1.7}
   .msg.me{align-self:flex-end;background:var(--lime);color:#0c1206;border-bottom-left-radius:4px}
-  .msg.ai{background:linear-gradient(180deg,#171c26,#12151d);border:1px solid rgba(201,255,87,.18);border-bottom-right-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.25)}
-  .aiinputwrap{flex:1;display:flex;align-items:center;gap:8px;background:var(--elev);border:1px solid var(--line);border-radius:12px;padding:0 12px}
-  .aiinputwrap .aiico{font-size:15px;flex-shrink:0;opacity:.8}
-  .aiinputwrap input{background:transparent;border:none;padding:11px 0}
-  .aiinputwrap input:focus{border:none;outline:none}
-  /* ---------- daily lock-screen style popup ---------- */
-  .dpop-bg{position:fixed;inset:0;background:rgba(4,5,8,.6);backdrop-filter:blur(6px);z-index:200;
-    display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .35s ease;padding:24px}
-  .dpop-bg.on{opacity:1}
-  .dpop-card{width:100%;max-width:320px;background:linear-gradient(180deg,rgba(23,28,38,.96),rgba(15,18,25,.98));
-    border:1px solid rgba(201,255,87,.25);border-radius:22px;padding:20px;box-shadow:0 30px 60px -20px rgba(0,0,0,.6);
-    transform:translateY(14px) scale(.97);transition:transform .35s cubic-bezier(.16,1,.3,1);text-align:center}
-  .dpop-bg.on .dpop-card{transform:translateY(0) scale(1)}
-  .dpop-icon{width:52px;height:52px;border-radius:50%;background:linear-gradient(155deg,var(--lime),#8fd12f);
-    display:flex;align-items:center;justify-content:center;font-size:24px;margin:0 auto 12px;box-shadow:0 6px 18px rgba(201,255,87,.3)}
-  .dpop-time{font-size:11px;color:var(--faint2);margin-bottom:6px;font-family:'Oswald',sans-serif;letter-spacing:.04em}
-  .dpop-text{font-size:13.5px;line-height:1.8;color:var(--tx);margin-bottom:16px}
+  .msg.ai{align-self:flex-start;background:var(--card2);border:1px solid var(--line);border-bottom-right-radius:4px}
   .chatinputrow{position:sticky;bottom:calc(64px + env(safe-area-inset-bottom));display:flex;gap:8px;
     padding:8px 0;background:linear-gradient(0deg,var(--bg) 60%,transparent)}
   .chatinputrow input{flex:1}
@@ -298,18 +282,16 @@
     </div>
     <div class="toprow">
       <button class="bell" id="bellBtn" data-a="opennotif" style="display:none">🔔<span class="bdg" id="notifBadge" style="display:none">0</span><span class="syncdot idle" id="syncDot"></span></button>
-      <div class="pill" id="trialPill" style="display:none"></div>
       <div class="pill" id="topPill">🔥 <span id="streakVal">0</span></div>
     </div>
   </div>
   <main id="view"></main>
   <nav class="nav" id="nav">
     <span id="navInd"></span>
-    <button class="nb" data-tab="home"><span class="ic">🏠</span>لوحة التحكم</button>
-    <button class="nb" data-tab="log"><span class="ic">🗓️</span>جدول اليوم<span class="navlock"></span></button>
-    <button class="nb" data-tab="food"><span class="ic">🍽</span>التغذية<span class="navlock"></span></button>
-    <button class="nb" data-tab="plan"><span class="ic">📅</span>التمارين<span class="navlock"></span></button>
-    <button class="nb" data-tab="ai"><span class="ic">✦</span>المدرب<span class="navlock"></span></button>
+    <button class="nb" data-tab="home"><span class="ic">🏠</span>الرئيسية</button>
+    <button class="nb" data-tab="plan"><span class="ic">📅</span>البرنامج</button>
+    <button class="nb" data-tab="food"><span class="ic">🍽</span>التغذية</button>
+    <button class="nb" data-tab="log"><span class="ic">📊</span>السجل</button>
     <button class="nb" data-tab="me"><span class="ic">👤</span>حسابي</button>
   </nav>
 </div>
@@ -640,7 +622,7 @@ const ACT={
 const EX_BY_ID={}; EXERCISES.forEach(e=>EX_BY_ID[e.id]=e);
 
 let S=null, tab='home', obStep=0, ob={}, selDay=new Date().getDay(), foodTab='today', exId=null, prevTab='plan', openMeal=null;
-let progPeriod='day', progRing='training', dailyMsgOpen=false;
+let progPeriod='week', progRing='training';
 let schedDay=new Date().getDay(), showAddTask=false, addTaskType='work';
 
 const TASK_TYPES={
@@ -1420,14 +1402,10 @@ function render(){
   bdg.style.display=unread?'flex':'none'; bdg.textContent=unread>9?'9+':unread;
   document.getElementById('topSub').textContent=DAYS_AR[new Date().getDay()]+' • '+new Date().toLocaleDateString('ar-EG',{day:'numeric',month:'long'});
   document.getElementById('streakVal').textContent=streak();
-  document.querySelectorAll('.nb').forEach(b=>{
-    b.classList.toggle('on',b.dataset.tab===tab);
-    const lk=b.querySelector('.navlock'); if(lk) lk.textContent=tabLocked(b.dataset.tab)?' 🔒':'';
-  });
+  document.querySelectorAll('.nb').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
   updateSyncBadge();
-  updateTrialPill();
   const locked=tabLocked(tab);
-  const pageHtml = tab==='ex'?renderExDetail():tab==='notif'?renderNotif():tab==='progress'?renderProgress():tab==='home'?renderHome():tab==='plan'?renderPlan():tab==='food'?renderFood():tab==='log'?renderSchedule():tab==='ai'?renderAiCoach():tab==='admin'?renderAdmin():renderMe();
+  const pageHtml = tab==='ex'?renderExDetail():tab==='notif'?renderNotif():tab==='progress'?renderProgress():tab==='home'?renderHome():tab==='plan'?renderPlan():tab==='food'?renderFood():tab==='log'?renderLog():tab==='ai'?renderAiCoach():tab==='admin'?renderAdmin():renderMe();
   v.innerHTML = locked?renderLockedOverlay(pageHtml):pageHtml;
   // only jump to top when actually switching to a different page — in-place
   // updates (adding a task, picking a type, saving a set...) keep your scroll spot
@@ -1437,19 +1415,20 @@ function render(){
   lastRenderedTab=tab;
 }
 function renderLockedOverlay(underneathHtml){
+  const trial=trialActive();
+  const daysLeft=trialDaysLeft();
   return `<div class="lockwrap">
     <div class="lockblur">${underneathHtml}</div>
-    <div class="lockcta"><div class="lockcard">
-      <div style="font-size:30px;margin-bottom:10px">🌟</div>
-      <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:17px;line-height:1.5;margin-bottom:8px">${sbTrialStart?'كنت رفيقك في أول يوم — يلا نكمل الرحلة سوا':'جرّب Pro مجانًا يوم كامل'}</div>
-      <div style="font-size:12.5px;line-height:1.8;color:var(--dim);margin-bottom:18px">
-        ${sbTrialStart?'اشتراكك في Pro بيفتحلك برنامجك وتغذيتك ومدربك الذكي بلا حدود، كل يوم وكل شهر.'
-          :'البرنامج، التغذية، السجل، والمدرب الذكي — كله متاح يوم كامل من غير أي التزام.'}
+    <div class="lockcard">
+      <div style="font-size:34px;margin-bottom:8px">🔒</div>
+      <div style="font-weight:800;font-size:16px;margin-bottom:6px">الجزء ده لأعضاء Pro بس</div>
+      <div class="dd" style="margin-bottom:14px;line-height:1.8">
+        ${sbTrialStart?'فترتك التجريبية خلصت — اشترك في Pro عشان تفتح البرنامج والتغذية والسجل والـ AI Coach.'
+          :'جرّب Pro مجانًا يوم كامل، وبعدين اشترك عشان تفضل مفتوح.'}
       </div>
-      ${!sbTrialStart?`<button class="btn p blk" data-a="starttrial" style="padding:14px;font-size:15px">ابدأ تجربة يوم مجاني 🎁</button>`
-        :`<button class="btn p blk" data-a="go" data-t="me" style="padding:14px;font-size:15px">اشترك في Pro — 899 ج.م / شهر</button>`}
-      <div style="font-size:10.5px;color:var(--faint2);margin-top:8px">إلغاء في أي وقت · بدون التزام سنوي</div>
-    </div></div>
+      ${!sbTrialStart?`<button class="btn p blk" data-a="starttrial">ابدأ تجربة يوم مجاني 🎁</button>`
+        :`<button class="btn p blk" data-a="go" data-t="me">عرض باقة Pro</button>`}
+    </div>
   </div>`;
 }
 
@@ -1684,13 +1663,6 @@ function renderExDetail(){
 /* ================= HOME ================= */
 function renderHome(){
   const ds=today(), dow=new Date().getDay();
-  const trialBanner=(sbTrialStart&&trialActive()&&!sbIsPro)?`<div class="card" style="background:linear-gradient(180deg,rgba(255,181,69,.09),rgba(21,25,34,.6));border:1.5px solid rgba(255,181,69,.3)">
-    <div style="font-weight:800;font-size:12.5px;color:var(--amber);margin-bottom:6px">تجربتك المجانية شغالة — ٢٤ ساعة كاملة</div>
-    <div style="font-size:12px;line-height:1.8;color:var(--tx)">استخدم التطبيق زي ما تحب دلوقتي: البرنامج، التغذية، المدرب الذكي، كله متاح. هنفكرك قبل ما الوقت يخلص.</div>
-  </div>`:(sbTrialStart&&!trialActive()&&!sbIsPro)?`<div class="card" style="background:linear-gradient(90deg,rgba(201,255,87,.12),rgba(21,25,34,.4));border:1px solid rgba(201,255,87,.3);display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px">
-    <div style="font-size:12px;line-height:1.6"><b style="color:var(--lime)">اشترك في Pro</b> — افتح برنامجك وتغذيتك ومدربك الذكي · 899 ج.م/شهر</div>
-    <button class="btn p sm" data-a="go" data-t="me" style="flex-shrink:0">اشترك</button>
-  </div>`:'';
   const sess=sessionFor(dow);
   const t=targetFor(ds), tot=foodTotals(ds);
   const pct=Math.min(100,Math.round(tot.k/t.kcal*100)||0);
@@ -1700,7 +1672,36 @@ function renderHome(){
     <div class="mt"><div class="mf" style="width:${Math.min(100,Math.round(v/tg*100)||0)}%;background:${c}"></div></div>
     <div class="mv">${v}/${tg}جم</div></div>`;
 
-  return trialBanner+`
+  let sessHtml;
+  if(!sess||sess.rest){
+    sessHtml=`<div class="empty"><div class="b">😴</div>النهارده راحة — الاستشفاء جزء من البرنامج<br><span style="font-size:11.5px">امشي 20-30 دقيقة لو حابب</span></div>`;
+  } else {
+    const done=sess.exercises.filter(id=>S.workoutLogs.some(l=>l.date===ds&&l.exerciseId===id)).length;
+    sessHtml=`<div style="padding:4px 12px 10px">
+      <div style="padding:12px 4px 8px">
+        <div style="font-family:'Oswald',sans-serif;font-size:20px;font-weight:700;letter-spacing:.02em">${sess.groups.join(' + ')}</div>
+        <div style="font-size:11.5px;color:var(--faint2);margin-top:5px">${sess.name} • ${sess.minutes} دقيقة • ${done}/${sess.exercises.length} خلصت</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:9px">
+          ${sess.groups.map(g=>`<span class="chip c-lime">${g}</span>`).join('')}
+          <span class="chip">${GOALS[S.profile.goal].sets}×${GOALS[S.profile.goal].reps}</span>
+        </div>
+      </div>
+      ${sess.exercises.map(id=>{
+        const e=EX_BY_ID[id]; if(!e)return '';
+        const isDone=S.workoutLogs.some(l=>l.date===ds&&l.exerciseId===id);
+        const last=lastSession(id);
+        return `<div class="li">
+          <div data-a="exdet" data-id="${id}" style="cursor:pointer;flex:1">
+          <div class="n">${e.name} ${isDone?'<span class="chip c-lime" style="margin-inline-start:5px">✓</span>':''}
+          <span style="color:var(--faint2);font-size:11px">ⓘ</span></div>
+          <div class="m">${e.muscle} • ${e.equipment}${last?` • آخر مرة ${last.weight||0}كجم × ${last.reps||0}`:''}</div></div>
+          <button class="ib" data-a="exdet" data-id="${id}">▸</button></div>`;
+      }).join('')}
+      <button class="btn p blk" data-a="go" data-t="plan" style="margin-top:12px">افتح الحصة كاملة</button>
+    </div>`;
+  }
+
+  return `
   <div class="card hero">
     <div class="ringw"><div class="ring" style="--pct:${pct}"><div class="ri">
       <div class="v">${tot.k}</div><div class="l">من ${t.kcal} سعرة</div></div></div></div>
@@ -1722,8 +1723,8 @@ function renderHome(){
       ${bar('دهون',tot.f,t.fat,'var(--amber)')}
     </div>
   </div>
-  ${(()=>{ const pe=progressEngine('day');
-    return `<div class="st">📊 تقدمك <span class="tag">اليوم</span></div>
+  ${(()=>{ const pe=progressEngine('week');
+    return `<div class="st">📊 تقدمك <span class="tag">آخر 7 أيام</span></div>
     <div class="card">
       <div class="row" data-a="openprogress" style="cursor:pointer"><strong style="font-size:13px">التقدم</strong><span style="color:var(--faint2);font-size:12px">التفاصيل ›</span></div>
       <div class="mrings" style="margin-top:12px">
@@ -1732,7 +1733,13 @@ function renderHome(){
           <div class="mlbl">${r.label}</div></button>`).join('')}
       </div>
       <div class="dd" style="text-align:center;margin-top:10px" data-a="openprogress">اضغط أي دايرة لتفاصيلها ›</div>
-    </div>`; })()}`;
+    </div>`; })()}
+  <div class="st">حصة النهارده <span class="tag">${DAYS_AR[dow]}</span></div>
+  <div class="card flush">${sessHtml}</div>
+  <div class="g2">
+    <button class="btn p" data-a="go" data-t="food">🍽 سجّل وجبة</button>
+    <button class="btn g" data-a="go" data-t="log">⚖️ سجّل وزن</button>
+  </div>`;
 }
 
 /* ================= PLAN ================= */
@@ -1888,6 +1895,59 @@ function renderFood(){
 }
 
 /* ================= LOG ================= */
+function renderLog(){
+  const ms=[...S.metrics].sort((a,b)=>a.date.localeCompare(b.date));
+  let spark='';
+  if(ms.length>=2){
+    const v=ms.slice(-12).map(m=>m.weight), mn=Math.min(...v), mx=Math.max(...v), rg=(mx-mn)||1;
+    const w=300,h=64,p=8;
+    const pts=v.map((x,i)=>`${p+i/(v.length-1)*(w-p*2)},${h-p-(x-mn)/rg*(h-p*2)}`).join(' ');
+    spark=`<svg viewBox="0 0 ${w} ${h}" width="100%" height="64" style="margin-top:10px">
+      <polyline points="${pts}" fill="none" stroke="var(--lime)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  }
+  let delta=null;
+  if(ms.length>=2){
+    const last=ms[ms.length-1];
+    for(let i=ms.length-2;i>=0;i--){
+      const gap=(new Date(last.date)-new Date(ms[i].date))/86400000;
+      if(gap>=5){delta=+(last.weight-ms[i].weight).toFixed(1);break;}
+    }
+  }
+  // strength progress
+  const trained=[...new Set(S.workoutLogs.map(l=>l.exerciseId))];
+  const prCards=trained.map(id=>{
+    const e=EX_BY_ID[id]; if(!e)return '';
+    const b=bestSet(id); if(!b)return '';
+    const all=S.workoutLogs.filter(l=>l.exerciseId===id&&l.weight).sort((a,b2)=>a.date.localeCompare(b2.date));
+    const first=all[0];
+    const gain=+(b.weight-first.weight).toFixed(1);
+    return `<div class="li"><div><div class="n">${e.name}</div>
+      <div class="m">${e.muscle} • أفضل ${b.weight}كجم × ${b.reps||'-'} • ${b.date}</div></div>
+      <span class="chip ${gain>0?'c-lime':'c-vio'}">${gain>0?'🔥 +'+gain+'كجم':'⭐ ثابت'}</span></div>`;
+  }).filter(Boolean).join('')||`<div class="empty">سجّل مجموعاتك في تبويب البرنامج وهتلاقي تقدمك هنا</div>`;
+
+  const rows=[...ms].reverse().slice(0,20).map(m=>`<div class="li">
+    <div><div class="n">${m.weight} كجم</div><div class="m">${m.date}${m.bf?' • دهون '+m.bf+'%':''}${m.waist?' • خصر '+m.waist+'سم':''}${m.chest?' • صدر '+m.chest+'سم':''}${m.arm?' • ذراع '+m.arm+'سم':''}</div></div>
+    <button class="ib" data-a="delmetric" data-id="${m.id}">🗑</button></div>`).join('')||`<div class="empty">لا توجد قياسات بعد</div>`;
+
+  return `<div class="card">
+    <div class="row"><strong style="font-size:13px">الوزن</strong>
+    <span class="num" style="font-size:21px">${ms.length?ms[ms.length-1].weight+' كجم':'—'}</span></div>
+    ${delta!==null?`<span class="chip ${(S.profile.goal==='bulk'?delta>0:delta<=0)?'c-lime':'c-cor'}" style="margin-top:9px">${delta>0?'+':''}${delta} كجم آخر أسبوع</span>`:''}
+    ${spark}</div>
+  <div class="card">
+    <div class="g2"><label class="f">الوزن (كجم)<input id="mw" type="number" inputmode="decimal" step="0.1"></label>
+    <label class="f">دهون %<input id="mf" type="number" inputmode="decimal" step="0.1"></label></div>
+    <div class="g3"><label class="f">صدر<input id="mc" type="number" inputmode="numeric"></label>
+    <label class="f">خصر<input id="mws" type="number" inputmode="numeric"></label>
+    <label class="f">ذراع<input id="ma" type="number" inputmode="numeric"></label></div>
+    <button class="btn p blk" data-a="savemetric">حفظ قياس النهارده</button></div>
+  <div class="st">تطور القوة</div>
+  <div class="card flush"><div style="padding:4px 12px">${prCards}</div></div>
+  <div class="st">سجل القياسات</div>
+  <div class="card flush"><div style="padding:4px 12px">${rows}</div></div>`;
+}
+
 /* ================= ME ================= */
 function renderSchedule(){
   const restSet=new Set(currentRestDays());
@@ -2162,214 +2222,69 @@ function renderProgress(){
 // ملاحظة: لسه مفيش مفتاح API حقيقي متربط. الدالة دي بترجع رد "تجريبي" (mock)
 // عشان نقدر نبني ونجرب الشات والكريدت كامل، ولما يتحدد مزوّد الـ AI (Claude/OpenAI)
 // هنستبدل جسم الدالة دي بنداء حقيقي لـ Supabase Edge Function اللي هتخبي المفتاح.
-const AI_SYSTEM_SCOPE=`إنت مدرب شخصي داخل تطبيق Fitness OS Pro، ودود ومحفّز وواثق من نفسه، وعارف عن العميل أكتر من أي مدرب بشري لأنك شايف كل بياناته الفعلية أول بأول: تمرينه، أكله، وزنه، جدوله، والتزامه. بترد بأسلوب شخصي ودافئ مبني على أرقامه هو بالظبط — مش نصايح عامة. بترد على أسئلة عن: برنامج التمرين، التغذية، السجل والتقدم، مواعيد الجدول. أي سؤال برّه النطاق ده، اعتذر بلطف ووجّه المستخدم يسأل حاجة متعلقة بالتطبيق. خليك مختصر جدًا: رد بحوالي 30 كلمة أو أقل في العادي، وزوّد بس لو السؤال فعلاً محتاج تفصيل أو خطوات.`;
-function buildAiContext(){
-  const ds=today(), dow=new Date().getDay();
-  const sess=sessionFor(dow), t=targetFor(ds), tot=foodTotals(ds), pe=progressEngine('month');
-  return `بيانات العميل الحالية:
-- الهدف: ${GOALS[S.profile.goal].label}, مستوى ${LEVELS[S.profile.level].label}
-- تمرين اليوم: ${sess&&!sess.rest?sess.name+' — '+sess.groups.join('، '):'يوم راحة'}
-- ستريك الالتزام: ${streak()} يوم متتالي
-- أكل اليوم: ${tot.k}/${t.kcal} سعرة، ${tot.p}/${t.protein}جم بروتين
-- تقدم الشهر: سكور عام ${pe.composite}/100${pe.body&&pe.body.weightTrend?`، الوزن اتغير ${pe.body.weightTrend.change>=0?'+':''}${pe.body.weightTrend.change}كجم لحد ${pe.body.weightTrend.weightNow}كجم`:''}
-رد على سؤال العميل بناءً على البيانات دي فقط. اكتب ردك كنص عادي فقط بدون أي Markdown — من غير #، **، أو قوائم مرقمة، فقط جمل طبيعية وممكن تستخدم سطر جديد بسيط بين الأفكار.`;
-}
-function sanitizeAiText(s){
-  return s
-    .replace(/```[\s\S]*?```/g,'')
-    .replace(/^#{1,6}\s*/gm,'')
-    .replace(/\*\*(.*?)\*\*/g,'$1')
-    .replace(/\*(.*?)\*/g,'$1')
-    .replace(/^[-*]\s+/gm,'• ')
-    .replace(/^\d+\.\s+/gm,'')
-    .replace(/\n{3,}/g,'\n\n')
-    .trim();
-}
-function capWords(s,n){
-  const words=s.split(/\s+/);
-  return words.length<=n?s:words.slice(0,n).join(' ')+'…';
-}
+const AI_SYSTEM_SCOPE=`إنت مساعد داخل تطبيق Fitness OS Pro بس. بترد على أسئلة عن: برنامج التمرين، التغذية، السجل والتقدم، مواعيد الجدول. أي سؤال برّه النطاق ده، اعتذر بلطف ووجّه المستخدم يسأل حاجة متعلقة بالتطبيق.`;
 async function fakeAiReply(userMsg){
-  try{
-    const text=await window.claude.complete({
-      system:AI_SYSTEM_SCOPE+'\n\n'+buildAiContext(),
-      messages:[{role:'user',content:userMsg}],
-      max_tokens:400
-    });
-    if(text&&text.trim()) return sanitizeAiText(text.trim());
-  }catch(e){ /* fall through to offline canned replies below */ }
   await new Promise(r=>setTimeout(r,650)); // محاكاة زمن استجابة حقيقي
   const msg=userMsg.toLowerCase();
   if(/تمرين|حصة|برنامج|عضل/.test(userMsg)){
     const dow=new Date().getDay(); const sess=sessionFor(dow);
-    if(sess&&!sess.rest) return `حصة النهارده "${sess.name}" وبتستهدف ${sess.groups.join(' + ')} — يلا نوريها! عندك ${sess.exercises.length} تمارين، افتح تبويب التمارين وشوفهم بالتفصيل. أنا معاك خطوة بخطوة 💪 عايزني أساعدك في حاجة تانية عن التمرين؟`;
-    return `النهارده يوم راحة — وده مش كسل، ده جزء من الخطة. العضلة بتكبر وقت الراحة مش وقت التمرين 💪 استمتع بيومك وهنشوف بكرة قوية.`;
+    if(sess&&!sess.rest) return `حصة النهارده هي "${sess.name}" وبتستهدف ${sess.groups.join(' + ')}. عندك ${sess.exercises.length} تمارين، تقدر تفتح تبويب البرنامج وتشوفهم بالتفصيل. عايزني أساعدك في حاجة تانية عن التمرين؟`;
+    return `النهارده يوم راحة في برنامجك — مفيش حصة مجدولة. الراحة جزء أساسي من التقدم 💪`;
   }
   if(/اكل|تغذي|بروتين|سعر/.test(userMsg)){
     const t=targetFor(today()), tot=foodTotals(today());
-    return `هدفك النهارده ${t.kcal} سعرة و${t.protein}جم بروتين. لحد دلوقتي سجّلت ${tot.k} سعرة و${tot.p}جم بروتين — متبقي ${Math.max(0,t.kcal-tot.k)} سعرة بس. كمّل كده وهتوصل لهدفك براحة.`;
+    return `هدفك النهارده ${t.kcal} سعرة و${t.protein}جم بروتين. لحد دلوقتي سجّلت ${tot.k} سعرة و${tot.p}جم بروتين. متبقي ${Math.max(0,t.kcal-tot.k)} سعرة. تقدر تفتح تبويب التغذية عشان تشوف خطة مقترحة.`;
   }
   if(/معاد|جدول|موعد/.test(userMsg)){
     return `تقدر تدير جدولك وتحدد ميعاد الجيم من تبويب "حسابي" تحت قسم الجدول الأسبوعي. عايزني أفكّرك بحاجة معينة؟`;
   }
-  if(/وزن/.test(userMsg)){
-    const pe=progressEngine('month');
-    if(!pe.body||!pe.body.weightTrend) return 'لسه ملكش قياسات كفاية — سجّل وزنك كل شوية، وأنا هتابع كل غرام معاك.';
-    const wt=pe.body.weightTrend;
-    return `وزنك اتغير ${wt.change>=0?'+':''}${wt.change}كجم آخر شهر، ودلوقتي ${wt.weightNow}كجم. أنا شايف كل رقم بتسجله، وده مسار كويس.`;
-  }
-  if(/تعب|مرهق|ستريك/.test(userMsg)){
-    const st=streak();
-    return `عندك ${st} يوم ستريك دلوقتي — ده مجهود حقيقي مش سهل. لو حاسس متعب، يوم راحة إضافي مش هيضرّك — بس حاول ما تسيبش كتير يوم ورا بعض. أنا هفضل اتفق معاك مش أدفعك.`;
-  }
-  return `سؤالك كان "${userMsg}" — أنا شايف كل بياناتك في التطبيق وهقدر أجاوبك بتفصيل أكتر لما نربط مفتاح API حقيقي قريبًا. اسألني عن التمرين، الأكل، الوزن، أو الستريك دلوقتي وهجاوبك فورًا.`;
-}
-function updateTrialPill(){
-  const el=document.getElementById('trialPill');
-  if(!el) return;
-  if(!S||!S.profile||sbIsPro||!sbTrialStart){el.style.display='none';return;}
-  const started=new Date(sbTrialStart);
-  const rem=TRIAL_DAYS*24*3600*1000-(Date.now()-started.getTime());
-  el.style.display='flex';el.style.fontFamily="'Oswald',sans-serif";
-  if(rem>0){
-    const s=Math.floor(rem/1000);
-    const hh=String(Math.floor(s/3600)).padStart(2,'0'),mm=String(Math.floor((s%3600)/60)).padStart(2,'0'),ss=String(s%60).padStart(2,'0');
-    el.style.background='rgba(255,181,69,.12)';el.style.color='var(--amber)';
-    el.textContent='⏱ '+hh+':'+mm+':'+ss;
-  }else{
-    el.style.background='rgba(255,93,115,.12)';el.style.color='var(--coral)';
-    el.textContent='التجربة انتهت';
-  }
-}
-setInterval(()=>{ if(S&&S.profile&&!sbIsPro) updateTrialPill(); },1000);
-function dailyCoachMessage(){
-  const t=today();
-  if(S.coachDaily&&S.coachDaily.date===t) return S.coachDaily.text;
-  const st=streak(); const pe=progressEngine('week');
-  const parts=[];
-  parts.push(st>0?`عامل ستريك ${st} يوم متتالي — استمرارية زي دي بتفرق فعلاً`:'لسه ما سجلتش حاجة النهاردة، ابدأ بحاجة صغيرة وسجّلها');
-  if(pe.nutrition&&pe.nutrition.loggedDays>0){
-    const pRatio=pe.nutrition.targetProtein?Math.round(pe.nutrition.avgProtein/pe.nutrition.targetProtein*100):0;
-    if(pRatio) parts.push(pRatio>=95?`بروتينك قريب من هدفك (${pRatio}%) 💪`:`بروتينك ${pRatio}% بس من هدفك — حاول تزوّده شوية`);
-  }
-  if(pe.training&&pe.training.trainDays>0) parts.push(pe.training.adherencePct>=80?`التزامك بأيام التمرين ${pe.training.adherencePct}% — ممتاز`:`التزامك بأيام التمرين ${pe.training.adherencePct}% بس — حاول ترجع للجدول`);
-  const text=parts.filter(Boolean).join(' · ');
-  S.coachDaily={date:t,text:text||'يلا نبدأ نسجل عشان أقدر أتابعك صح'};
-  fetchDailyCoachMessage(t);
-  return S.coachDaily.text;
-}
-function pickCoachPersona(){
-  const st=streak(); const pe=progressEngine('week');
-  const trainOk=pe.training&&pe.training.trainDays>0?pe.training.adherencePct:null;
-  const foodOk=pe.nutrition&&pe.nutrition.loggedDays>0;
-  if(st===0&&!foodOk) return {key:'حنون وعطوف',note:'العميل مقصّر في التسجيل من فترة — رسالة تشجيع دافئة من غير لوم'};
-  if(trainOk!==null&&trainOk<60) return {key:'صارم',note:'العميل بيفوّت أيام تمرين كتير — رسالة حازمة بس محترمة تدفعه يرجع للجدول'};
-  if(st>=7&&(trainOk===null||trainOk>=85)) return {key:'مدرب محترف',note:'العميل ملتزم جدًا — رسالة احترافية فخورة بيه وبتدفعه للمستوى الجاي'};
-  if(foodOk&&trainOk!==null) return {key:'ذكي',note:'أعطِ ملاحظة ذكية تربط بين رقمين من بياناته (مثلاً بروتين وأداء تمرين) مش مجرد تلخيص'};
-  return {key:'ناصح',note:'قدّم نصيحة عملية واحدة بسيطة بناءً على أضعف نقطة في بياناته'};
-}
-let dailyFetchInFlight=false;
-async function fetchDailyCoachMessage(t){
-  if(dailyFetchInFlight) return;
-  dailyFetchInFlight=true;
-  try{
-    const persona=pickCoachPersona();
-    const text=await window.claude.complete({
-      system:AI_SYSTEM_SCOPE+'\n\n'+buildAiContext()+`\n\nخصّص شخصيتك في الرسالة دي عشان تكون "${persona.key}": ${persona.note}. اكتب رسالة يومية واحدة قصيرة جدًا — بحد أقصى 30 كلمة تقريبًا إلا لو الموقف فعلاً محتاج أكتر — موجهة للعميل مباشرة، نص عادي بدون Markdown.`,
-      messages:[{role:'user',content:'اكتب رسالة اليوم للعميل.'}],
-      max_tokens:220
-    });
-    if(text&&text.trim()&&S.coachDaily&&S.coachDaily.date===t){
-      S.coachDaily={date:t,text:capWords(sanitizeAiText(text.trim()),35),persona:persona.key};
-      await save(); if(tab==='ai') render();
-    }
-  }catch(e){ /* keep rule-based fallback already shown */ }
-  dailyFetchInFlight=false;
-}
-function dismissDailyPopup(){
-  const el=document.getElementById('dailyPopup');
-  if(!el) return;
-  el.classList.remove('on');
-  setTimeout(()=>el.remove(),350);
-}
-function showDailyPopup(){
-  if(document.getElementById('dailyPopup')) return;
-  const msg=dailyCoachMessage();
-  const el=document.createElement('div');
-  el.id='dailyPopup'; el.className='dpop-bg';
-  el.innerHTML=`<div class="dpop-card">
-    <div class="dpop-icon">🏋️</div>
-    <div class="dpop-time">${new Date().toLocaleTimeString('ar-EG',{hour:'2-digit',minute:'2-digit'})} · مدربك الشخصي</div>
-    <div class="dpop-text">${msg}</div>
-    <button class="btn p blk" style="width:100%">تمام 👍</button>
-  </div>`;
-  el.addEventListener('click',e=>{ if(e.target===el) dismissDailyPopup(); });
-  el.querySelector('button').addEventListener('click',dismissDailyPopup);
-  document.body.appendChild(el);
-  requestAnimationFrame(()=>el.classList.add('on'));
-  S.coachDaily=S.coachDaily||{}; S.coachDaily.popupShown=today(); save();
-}
-function maybeShowDailyPopup(){
-  if(!S||!S.profile) return;
-  if(S.coachDaily&&S.coachDaily.popupShown===today()) return;
-  setTimeout(showDailyPopup,1400);
+  return `(رد تجريبي — لسه مفيش AI حقيقي متربط) سؤالك كان: "${userMsg}". لما نربط مفتاح API هرد عليك بتفصيل أكتر بناءً على بياناتك الفعلية في التطبيق.`;
 }
 function aiCreditsLeft(){ return {daily:Math.max(0,AI_DAILY_LIMIT-aiCreditsDaily),monthly:Math.max(0,AI_MONTHLY_LIMIT-aiCreditsMonthly)}; }
 function renderAiCoach(){
   const left=aiCreditsLeft();
   const log=S.aiChat||[];
-  const msgs=log.length?log.map(m=>m.role==='user'
-    ?`<div class="msg me">${m.text}</div>`
-    :`<div style="display:flex;gap:8px;align-self:flex-start;max-width:88%">
-        <div style="flex-shrink:0;width:28px;height:28px;border-radius:50%;background:linear-gradient(155deg,var(--lime),#8fd12f);display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 2px 8px rgba(201,255,87,.25)">🏋️</div>
-        <div class="msg ai">${m.text}</div>
-      </div>`).join('')
-    :`<div class="empty"><div class="b">🏋️</div>أهلاً! أنا مدربك الشخصي — شايف كل حاجة عنك في التطبيق. اسألني أي حاجة عن تمرينك، أكلك، أو جدولك — مستني لأرقامك مش لرد عام</div>`;
+  const msgs=log.length?log.map(m=>`<div class="msg ${m.role==='user'?'me':'ai'}">${m.text}</div>`).join('')
+    :`<div class="empty"><div class="b">🤖</div>اسألني أي حاجة عن برنامجك، أكلك، أو جدولك</div>`;
   return `<button class="btn g sm" data-a="go" data-t="me" style="margin:6px 0 12px">‹ رجوع</button>
-  <div class="row" style="margin:20px 2px 9px">
-    <div class="st" style="margin:0">🏋️ AI Coach</div>
-    <button class="ib" data-a="airesetchat" title="تحديث المحادثة">🔄</button>
-  </div>
-  <div class="card" style="margin-bottom:12px">
-    ${(()=>{ const msgText=dailyCoachMessage(); const persona=S.coachDaily&&S.coachDaily.persona; return `
-    <div class="row" style="cursor:pointer" data-a="toggledaily">
-      <div style="font-weight:700;font-size:12.5px">✦ رسالة اليوم${persona?` <span class="chip c-lime" style="margin-inline-start:6px">${persona}</span>`:''}</div>
-      <span style="color:var(--faint2);font-size:12px">${dailyMsgOpen?'إخفاء ▲':'إظهار ▾'}</span>
-    </div>
-    ${dailyMsgOpen?`<div style="margin-top:10px;font-size:13.5px;line-height:1.9">${msgText}</div>
-    <div style="margin-top:10px;font-size:10.5px;color:var(--faint2)">مبني على بياناتك في التطبيق بس — تمرينك وأكلك ووزنك</div>`:''}`; })()}
-  </div>
-  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
-    <span class="chip c-lime" style="cursor:pointer" data-a="aiquick" data-q="وزني واقف ليه">وزني واقف ليه</span>
-    <span class="chip c-vio" style="cursor:pointer" data-a="aiquick" data-q="عايز تعديل في البرنامج">تعديل البرنامج</span>
-    <span class="chip c-cy" style="cursor:pointer" data-a="aiquick" data-q="اقترحلي وجبة بديلة">وجبة بديلة</span>
-  </div>
-  <div class="creditbar">
-    <span><span style="color:var(--faint2)">📅 النهاردة</span> <b style="color:var(--tx)">${left.daily}</b>/${AI_DAILY_LIMIT}</span>
-    <span><span style="color:var(--faint2)">🗓️ الشهر</span> <b style="color:var(--tx)">${left.monthly}</b>/${AI_MONTHLY_LIMIT}</span>
-  </div>
+  <div class="st">🤖 AI Coach <span class="tag">تجريبي — بيتظبط قريب</span></div>
+  <div class="creditbar"><span>رصيدك النهارده: ${left.daily}/${AI_DAILY_LIMIT}</span><span>الشهر ده: ${left.monthly}/${AI_MONTHLY_LIMIT}</span></div>
   <div class="chatlog" id="chatlog">${msgs}</div>
   <div class="chatinputrow">
-    <div class="aiinputwrap">
-      <span class="aiico">🏋️</span>
-      <input id="ai_input" type="text" placeholder="اسأل مدربك..." onkeydown="if(event.key==='Enter')act('aisend')">
-    </div>
-    <button class="btn p sm" data-a="aisend" style="width:44px;flex-shrink:0">↑</button>
+    <input id="ai_input" type="text" placeholder="اسأل عن التمرين، الأكل، أو الجدول..." onkeydown="if(event.key==='Enter')act('aisend')">
+    <button class="btn p sm" data-a="aisend">إرسال</button>
   </div>`;
 }
 async function sendAiMessage(){
   const inputEl=document.getElementById('ai_input');
   const text=inputEl?inputEl.value.trim():'';
   if(!text) return;
-  const left=aiCreditsLeft();
-  if(left.daily<=0){ toast('خلص رصيدك اليومي من الـ AI Coach — هيتجدد بكرة'); return; }
-  if(left.monthly<=0){ toast('خلص رصيدك الشهري من الـ AI Coach'); return; }
   if(!S.aiChat) S.aiChat=[];
   S.aiChat.push({role:'user',text});
+  if(inputEl) inputEl.value='';
   render();
-  const reply=await fakeAiReply(text);
+  setTimeout(()=>{ const cl=document.getElementById('chatlog'); if(cl) cl.scrollTop=cl.scrollHeight; },30);
+
+  let reply;
+  try{
+    const {data:{session}}=await sb.auth.getSession();
+    const accessToken=session?session.access_token:null;
+    if(!accessToken) throw new Error('no session');
+    const res=await fetch('/api/ai-chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text,accessToken})
+    });
+    const json=await res.json();
+    if(!res.ok){ toast(json.error||'حصل خطأ'); S.aiChat.pop(); render(); return; }
+    reply=json.reply;
+    if(json.creditsLeft){ aiCreditsDaily=AI_DAILY_LIMIT-json.creditsLeft.daily; aiCreditsMonthly=AI_MONTHLY_LIMIT-json.creditsLeft.monthly; }
+  }catch(e){
+    // fallback: لو السيرفر مش متاح (مثلاً وقت التطوير المحلي)، نستخدم رد تجريبي محلي
+    reply=await fakeAiReply(text);
+    await consumeAiCredit();
+  }
   S.aiChat.push({role:'ai',text:reply});
-  await consumeAiCredit();
   await save();
   render();
   setTimeout(()=>{ const cl=document.getElementById('chatlog'); if(cl) cl.scrollTop=cl.scrollHeight; },50);
@@ -2406,7 +2321,7 @@ function renderUpgradeBlock(){
   </div>`;
   return `<div style="text-align:center;margin-bottom:10px">
       <span class="num" style="font-size:22px;color:var(--lime)">899</span>
-      <span style="font-size:13px;color:var(--dim)"> جنيه / شهر</span>
+      <span style="font-size:13px;color:var(--dim)"> جنيه / كل 3 شهور</span>
     </div>
     <button class="btn p blk" data-a="upgradepro">طلب الترقية إلى Pro</button>
     <div style="font-size:10.5px;color:var(--faint2);margin-top:8px;text-align:center">هنبعتلك تفاصيل الدفع بعد إرسال الطلب</div>`;
@@ -2426,7 +2341,54 @@ function renderMe(){
         <button class="btn p sm blk" style="margin-top:11px" data-a="authshow">تسجيل الدخول</button>
       `}
     </div>`;
-  return cloudCard+`<div class="card">
+  const proCard=(!CLOUD_ENABLED||!sbUser)?'':isPro()?(()=>{
+    if(sbIsAdmin) return `<div class="st">⭐ العضوية</div>
+      <div class="card" style="border-color:rgba(201,255,87,.3)">
+        <div class="row"><div><div style="font-weight:700;font-size:13.5px">أدمن ⚙️</div>
+          <div class="dd" style="margin-top:3px">كل الفيتشرز متاحة ليك بالكامل</div></div>
+          <span class="chip c-lime">Admin</span></div>
+      </div>`;
+    if(sbIsPro) return `<div class="st">⭐ العضوية</div>
+      <div class="card" style="border-color:rgba(201,255,87,.3)">
+        <div class="row"><div><div style="font-weight:700;font-size:13.5px">عضو Pro ⭐</div>
+          <div class="dd" style="margin-top:3px">كل الفيتشرز متاحة ليك بالكامل</div></div>
+          <span class="chip c-lime">Pro</span></div>
+      </div>`;
+    // تجربة مجانية سارية — نعرض عداد تنازلي حي
+    const r=trialRemaining();
+    const timeStr=String(r.h).padStart(2,'0')+':'+String(r.m).padStart(2,'0')+':'+String(r.s).padStart(2,'0');
+    return `<div class="st">🎁 العضوية</div>
+      <div class="card" style="border-color:rgba(255,181,69,.35)">
+        <div class="row"><div><div style="font-weight:700;font-size:13.5px">تجربة مجانية</div>
+          <div class="dd" style="margin-top:3px">كل الفيتشرز متاحة ليك مؤقتًا</div></div>
+          <span class="chip c-amb">مجانية</span></div>
+        <div class="div"></div>
+        <div style="text-align:center">
+          <div class="num" id="trialCountdown" style="font-size:26px;letter-spacing:.05em;color:var(--amber)">${timeStr}</div>
+          <div class="dd" style="margin-top:4px">سيتم وقف التجربة المجانية بعد الوقت ده</div>
+        </div>
+        <div class="div"></div>
+        ${renderUpgradeBlock()}
+      </div>`;
+  })():`<div class="st">⭐ ترقية الحساب</div>
+    <div class="card" style="border-color:rgba(201,255,87,.3)">
+      <div style="font-weight:700;font-size:14.5px;margin-bottom:6px">Fitness OS Pro ⭐</div>
+      <div class="dd" style="line-height:1.9;margin-bottom:12px">
+        • برنامج تمرين وخطة أكل كاملة<br>
+        • تتبع تقدم وإحصائيات متقدمة<br>
+        • AI Coach يجاوبك على أسئلتك<br>
+        • دعم مباشر وتحديثات مبكرة
+      </div>
+      ${!sbTrialStart?`<button class="btn p blk" data-a="starttrial">جرّب مجانًا يوم كامل 🎁</button>`
+        :renderUpgradeBlock()}
+    </div>`;
+  const aiCard=(!CLOUD_ENABLED||!sbUser)?'':`<div class="st">🤖 AI Coach</div>
+    <div class="card"><div class="row"><div><div style="font-weight:700;font-size:13.5px">اسأل مدربك الذكي</div>
+      <div class="dd" style="margin-top:3px">عن التمرين، التغذية، أو جدولك</div></div>
+      <button class="btn ${isPro()?'p':'g'} sm" data-a="go" data-t="ai">افتح 💬</button></div></div>`;
+  const adminCard=sbIsAdmin?`<div class="st">⚙️ إدارة</div>
+    <div class="card"><button class="btn g blk" data-a="go" data-t="admin">لوحة تحكم الأدمن</button></div>`:'';
+  return cloudCard+proCard+aiCard+adminCard+`<div class="card">
     <div class="row"><strong style="font-size:14px">بياناتك</strong>
     <span class="chip c-lime">${GOALS[p.goal].label}</span></div>
     <div class="div"></div>
@@ -2440,7 +2402,7 @@ function renderMe(){
         <option value="female" ${p.gender==='female'?'selected':''}>أنثى</option></select></label></div>
     <label class="f">النشاط<select id="p_act">${Object.keys(ACT).map(k=>`<option value="${k}" ${p.activity===k?'selected':''}>${ACT[k].l}</option>`).join('')}</select></label>
     <label class="f">الهدف<select id="p_goal">${Object.keys(GOALS).map(k=>`<option value="${k}" ${p.goal===k?'selected':''}>${GOALS[k].label}</option>`).join('')}</select></label>
-    <button class="btn p blk" data-a="saveprofile">تعديل وضبط</button></div>
+    <button class="btn p blk" data-a="saveprofile">حفظ وإعادة الحساب</button></div>
 
   <div class="st">حساباتك</div>
   <div class="card">
@@ -2458,7 +2420,11 @@ function renderMe(){
     <button class="btn g blk" data-a="regen" style="margin-top:10px">🔁 توليد برنامج جديد</button>
     <button class="btn g blk" data-a="redo" style="margin-top:8px">🔄 إعادة إدخال بياناتي من الأول</button>
     <div style="font-size:11px;color:var(--faint2);margin-top:7px;line-height:1.6">إعادة الإدخال بتخليك تجاوب على الأسئلة تاني وتبني برنامج جديد، وسجل تمارينك وقياساتك بيفضل محفوظ.</div>
-  </div>`;
+    <div class="div"></div>
+    <button class="btn d blk" data-a="reset">مسح كل البيانات والبدء من الأول</button>
+  </div>
+
+  ${renderSchedule()}`;
 }
 
 /* ================= ACTIONS ================= */
@@ -2476,9 +2442,6 @@ async function act(a,d,el){
     await ensureTrialStarted();toast('اتفعلت تجربتك المجانية ليوم كامل 🎁');render();return;
   }
   if(a==='aisend'){await sendAiMessage();return;}
-  if(a==='aiquick'){const inp=document.getElementById('ai_input');if(inp){inp.value=el.dataset.q;await sendAiMessage();}return;}
-  if(a==='airesetchat'){S.aiChat=[];await save();toast('اتمسحت المحادثة');render();return;}
-  if(a==='toggledaily'){dailyMsgOpen=!dailyMsgOpen;render();return;}
   if(a==='setlock'){
     if(!sbIsAdmin)return;
     const v=d.v==='null'?null:d.v==='true';
@@ -2504,7 +2467,7 @@ async function act(a,d,el){
   if(a==='openprogress'){if(tab!=='progress')prevTab=tab;tab='progress';render();return;}
   if(a==='progperiod'){progPeriod=d.k;render();return;}
   if(a==='progring'){progRing=d.k;render();return;}
-  if(a==='openring'){if(tab!=='progress')prevTab=tab;progRing=d.k;progPeriod='day';tab='progress';render();return;}
+  if(a==='openring'){if(tab!=='progress')prevTab=tab;progRing=d.k;progPeriod='week';tab='progress';render();return;}
   if(a==='togglenotif'){
     const cur=getPath(S.notifSettings,d.path);
     setPath(S.notifSettings,d.path,!cur);
@@ -2682,7 +2645,6 @@ async function withLoadingSkeleton(work){
   if(CLOUD_ENABLED) await initCloud();
   render();
   scheduleToday();
-  maybeShowDailyPopup();
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') scheduleToday(); });
   // تحديث العداد التنازلي للتجربة المجانية كل ثانية من غير ما نعيد رسم الصفحة كلها —
   // لو التجربة خلصت أثناء ما المستخدم فاتح الصفحة، نعيد render كامل عشان يتقفل التطبيق فورًا
