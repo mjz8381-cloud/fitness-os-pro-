@@ -2203,13 +2203,17 @@ function capWords(s,n){
   const words=s.split(/\s+/);
   return words.length<=n?s:words.slice(0,n).join(' ')+'…';
 }
+async function callAiCoach(system,messages,max_tokens){
+  try{
+    const r=await fetch('/api/ai-chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({system,messages,max_tokens})});
+    if(r.ok){ const d=await r.json(); if(d.text) return d.text; }
+  }catch(e){ /* /api/ai-chat not deployed here (e.g. this preview) — try window.claude.complete */ }
+  if(window.claude&&window.claude.complete) return await window.claude.complete({system,messages,max_tokens});
+  throw new Error('no AI backend available');
+}
 async function fakeAiReply(userMsg){
   try{
-    const text=await window.claude.complete({
-      system:AI_SYSTEM_SCOPE+'\n\n'+buildAiContext(),
-      messages:[{role:'user',content:userMsg}],
-      max_tokens:400
-    });
+    const text=await callAiCoach(AI_SYSTEM_SCOPE+'\n\n'+buildAiContext(),[{role:'user',content:userMsg}],400);
     if(text&&text.trim()) return sanitizeAiText(text.trim());
   }catch(e){ /* fall through to offline canned replies below */ }
   await new Promise(r=>setTimeout(r,650)); // محاكاة زمن استجابة حقيقي
@@ -2288,11 +2292,11 @@ async function fetchDailyCoachMessage(t){
   dailyFetchInFlight=true;
   try{
     const persona=pickCoachPersona();
-    const text=await window.claude.complete({
-      system:AI_SYSTEM_SCOPE+'\n\n'+buildAiContext()+`\n\nخصّص شخصيتك في الرسالة دي عشان تكون "${persona.key}": ${persona.note}. اكتب رسالة يومية واحدة قصيرة جدًا — بحد أقصى 30 كلمة تقريبًا إلا لو الموقف فعلاً محتاج أكتر — موجهة للعميل مباشرة، نص عادي بدون Markdown.`,
-      messages:[{role:'user',content:'اكتب رسالة اليوم للعميل.'}],
-      max_tokens:220
-    });
+    const text=await callAiCoach(
+      AI_SYSTEM_SCOPE+'\n\n'+buildAiContext()+`\n\nخصّص شخصيتك في الرسالة دي عشان تكون "${persona.key}": ${persona.note}. اكتب رسالة يومية واحدة قصيرة جدًا — بحد أقصى 30 كلمة تقريبًا إلا لو الموقف فعلاً محتاج أكتر — موجهة للعميل مباشرة، نص عادي بدون Markdown.`,
+      [{role:'user',content:'اكتب رسالة اليوم للعميل.'}],
+      220
+    );
     if(text&&text.trim()&&S.coachDaily&&S.coachDaily.date===t){
       S.coachDaily={date:t,text:capWords(sanitizeAiText(text.trim()),35),persona:persona.key};
       await save(); if(tab==='ai') render();
