@@ -297,6 +297,7 @@
 </div>
 <div id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 /* ============ CLOUD SYNC (Supabase) ============ */
 const SUPABASE_URL='https://iiqjfvdtyzirqkcunmjb.supabase.co';
@@ -325,6 +326,17 @@ function trialDaysLeft(){
   const started=new Date(sbTrialStart);
   const diffDays=(Date.now()-started.getTime())/86400000;
   return Math.max(0,+(TRIAL_DAYS-diffDays).toFixed(2));
+}
+// بيرجع الوقت المتبقي من التجربة كـ {h,m,s,totalMs} — مستخدمة في العداد التنازلي الحي
+function trialRemaining(){
+  if(!sbTrialStart) return {h:0,m:0,s:0,totalMs:0};
+  const started=new Date(sbTrialStart).getTime();
+  const endMs=started+TRIAL_DAYS*86400000;
+  const totalMs=Math.max(0,endMs-Date.now());
+  const h=Math.floor(totalMs/3600000);
+  const m=Math.floor((totalMs%3600000)/60000);
+  const s=Math.floor((totalMs%60000)/1000);
+  return {h,m,s,totalMs};
 }
 // isPro: هل المستخدم عنده وصول كامل للتطبيق؟ (اشتراك حقيقي، أو تجربة سارية، أو الأدمن فاتح كل حاجة يدويًا)
 function isPro(){
@@ -760,6 +772,38 @@ async function setAppLockOverride(val){
   }catch(e){ toast('حصل خطأ في الحفظ'); }
 }
 // ملحوظة: refreshProStatus اتدمجت جوه cloudPull، عشان تجيب كل حالة الاشتراك/الأدمن/التجربة/الكريدت في نداء واحد
+
+/* ============ EMAILJS: إشعار طلب ترقية Pro ============
+   1) اعمل حساب مجاني على emailjs.com
+   2) Email Services > أضف خدمة (جيميل مثلاً) > هياديك Service ID
+   3) Email Templates > قالب فيه {{user_email}} و {{request_date}} > هياديك Template ID
+   4) Account > General > هتلاقي Public Key
+   5) حط التلاتة تحت واحفظ */
+const EMAILJS_SERVICE_ID='YOUR_SERVICE_ID';
+const EMAILJS_TEMPLATE_ID='YOUR_TEMPLATE_ID';
+const EMAILJS_PUBLIC_KEY='YOUR_PUBLIC_KEY';
+const EMAILJS_READY=!EMAILJS_SERVICE_ID.startsWith('YOUR_')&&!EMAILJS_TEMPLATE_ID.startsWith('YOUR_')&&!EMAILJS_PUBLIC_KEY.startsWith('YOUR_');
+let upgradeRequestSent=false;
+async function requestUpgrade(){
+  if(!sbUser){toast('لازم تسجّل دخول الأول');return;}
+  if(!EMAILJS_READY){
+    toast('نظام طلب الترقية لسه بيتجهز — قريب هيبقى متاح 🚀');
+    return;
+  }
+  try{
+    if(typeof emailjs==='undefined'){toast('حصل خطأ، جرب تاني بعدين');return;}
+    await emailjs.send(EMAILJS_SERVICE_ID,EMAILJS_TEMPLATE_ID,{
+      user_email:sbUser.email,
+      request_date:new Date().toLocaleString('ar-EG')
+    },EMAILJS_PUBLIC_KEY);
+    upgradeRequestSent=true;
+    toast('تم إرسال طلبك ✅ هنتواصل معاك قريب');
+    render();
+  }catch(e){
+    toast('حصل خطأ في إرسال الطلب — جرب تاني');
+  }
+}
+
 function updateSyncBadge(){
   const el=document.getElementById('syncDot'); if(!el) return;
   el.className='syncdot '+syncState;
@@ -2253,6 +2297,18 @@ function renderAdmin(){
   <div class="dd" style="padding:0 4px">لتفعيل Pro لمستخدم معين يدويًا: روح Supabase → Table Editor → app_state → دوّر على المستخدم بالإيميل وغيّر is_pro لـ true.</div>`;
 }
 
+function renderUpgradeBlock(){
+  if(upgradeRequestSent) return `<div style="text-align:center;padding:6px 0">
+    <div style="font-size:24px;margin-bottom:4px">✅</div>
+    <div class="dd" style="line-height:1.8">تم إرسال طلبك، هنتواصل معاك قريب لإتمام الاشتراك</div>
+  </div>`;
+  return `<div style="text-align:center;margin-bottom:10px">
+      <span class="num" style="font-size:22px;color:var(--lime)">899</span>
+      <span style="font-size:13px;color:var(--dim)"> جنيه / كل 3 شهور</span>
+    </div>
+    <button class="btn p blk" data-a="upgradepro">طلب الترقية إلى Pro</button>
+    <div style="font-size:10.5px;color:var(--faint2);margin-top:8px;text-align:center">هنبعتلك تفاصيل الدفع بعد إرسال الطلب</div>`;
+}
 function renderMe(){
   const p=S.profile, t=macroTargets();
   const bmi=+(p.weight/Math.pow(p.height/100,2)).toFixed(1);
@@ -2268,13 +2324,36 @@ function renderMe(){
         <button class="btn p sm blk" style="margin-top:11px" data-a="authshow">تسجيل الدخول</button>
       `}
     </div>`;
-  const trialBadge=sbTrialStart&&trialActive()?` • تجربة مجانية (متبقي ${trialDaysLeft()<1?Math.round(trialDaysLeft()*24)+' ساعة':Math.round(trialDaysLeft())+' يوم'})`:'';
-  const proCard=(!CLOUD_ENABLED||!sbUser)?'':isPro()?`<div class="st">⭐ العضوية</div>
-    <div class="card" style="border-color:rgba(201,255,87,.3)">
-      <div class="row"><div><div style="font-weight:700;font-size:13.5px">${sbIsAdmin?'أدمن ⚙️':sbIsPro?'عضو Pro ⭐':'تجربة مجانية 🎁'}</div>
-        <div class="dd" style="margin-top:3px">كل الفيتشرز متاحة ليك بالكامل${trialBadge}</div></div>
-        <span class="chip c-lime">${sbIsAdmin?'Admin':'Pro'}</span></div>
-    </div>`:`<div class="st">⭐ ترقية الحساب</div>
+  const proCard=(!CLOUD_ENABLED||!sbUser)?'':isPro()?(()=>{
+    if(sbIsAdmin) return `<div class="st">⭐ العضوية</div>
+      <div class="card" style="border-color:rgba(201,255,87,.3)">
+        <div class="row"><div><div style="font-weight:700;font-size:13.5px">أدمن ⚙️</div>
+          <div class="dd" style="margin-top:3px">كل الفيتشرز متاحة ليك بالكامل</div></div>
+          <span class="chip c-lime">Admin</span></div>
+      </div>`;
+    if(sbIsPro) return `<div class="st">⭐ العضوية</div>
+      <div class="card" style="border-color:rgba(201,255,87,.3)">
+        <div class="row"><div><div style="font-weight:700;font-size:13.5px">عضو Pro ⭐</div>
+          <div class="dd" style="margin-top:3px">كل الفيتشرز متاحة ليك بالكامل</div></div>
+          <span class="chip c-lime">Pro</span></div>
+      </div>`;
+    // تجربة مجانية سارية — نعرض عداد تنازلي حي
+    const r=trialRemaining();
+    const timeStr=String(r.h).padStart(2,'0')+':'+String(r.m).padStart(2,'0')+':'+String(r.s).padStart(2,'0');
+    return `<div class="st">🎁 العضوية</div>
+      <div class="card" style="border-color:rgba(255,181,69,.35)">
+        <div class="row"><div><div style="font-weight:700;font-size:13.5px">تجربة مجانية</div>
+          <div class="dd" style="margin-top:3px">كل الفيتشرز متاحة ليك مؤقتًا</div></div>
+          <span class="chip c-amb">مجانية</span></div>
+        <div class="div"></div>
+        <div style="text-align:center">
+          <div class="num" id="trialCountdown" style="font-size:26px;letter-spacing:.05em;color:var(--amber)">${timeStr}</div>
+          <div class="dd" style="margin-top:4px">سيتم وقف التجربة المجانية بعد الوقت ده</div>
+        </div>
+        <div class="div"></div>
+        ${renderUpgradeBlock()}
+      </div>`;
+  })():`<div class="st">⭐ ترقية الحساب</div>
     <div class="card" style="border-color:rgba(201,255,87,.3)">
       <div style="font-weight:700;font-size:14.5px;margin-bottom:6px">Fitness OS Pro ⭐</div>
       <div class="dd" style="line-height:1.9;margin-bottom:12px">
@@ -2284,8 +2363,7 @@ function renderMe(){
         • دعم مباشر وتحديثات مبكرة
       </div>
       ${!sbTrialStart?`<button class="btn p blk" data-a="starttrial">جرّب مجانًا يوم كامل 🎁</button>`
-        :`<button class="btn p blk" data-a="upgradepro">الترقية للـ Pro (قريبًا)</button>
-      <div style="font-size:10.5px;color:var(--faint2);margin-top:8px;text-align:center">نظام الدفع لسه بيتجهز — هيتفعل قريب</div>`}
+        :renderUpgradeBlock()}
     </div>`;
   const aiCard=(!CLOUD_ENABLED||!sbUser)?'':`<div class="st">🤖 AI Coach</div>
     <div class="card"><div class="row"><div><div style="font-weight:700;font-size:13.5px">اسأل مدربك الذكي</div>
@@ -2341,7 +2419,7 @@ async function act(a,d,el){
   if(a==='authskip'){guestMode=true;render();return;}
   if(a==='authshow'){guestMode=false;render();return;}
   if(a==='authlogout'){await doLogout();return;}
-  if(a==='upgradepro'){toast('نظام الدفع لسه بيتجهز — قريب هيبقى متاح 🚀');return;}
+  if(a==='upgradepro'){await requestUpgrade();return;}
   if(a==='starttrial'){
     if(!CLOUD_ENABLED||!sbUser){toast('لازم تسجّل دخول الأول');return;}
     await ensureTrialStarted();toast('اتفعلت تجربتك المجانية ليوم كامل 🎁');render();return;
@@ -2551,5 +2629,14 @@ async function withLoadingSkeleton(work){
   render();
   scheduleToday();
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') scheduleToday(); });
+  // تحديث العداد التنازلي للتجربة المجانية كل ثانية من غير ما نعيد رسم الصفحة كلها —
+  // لو التجربة خلصت أثناء ما المستخدم فاتح الصفحة، نعيد render كامل عشان يتقفل التطبيق فورًا
+  setInterval(()=>{
+    const el=document.getElementById('trialCountdown');
+    if(!el||!sbTrialStart) return;
+    const r=trialRemaining();
+    if(r.totalMs<=0){ render(); return; }
+    el.textContent=String(r.h).padStart(2,'0')+':'+String(r.m).padStart(2,'0')+':'+String(r.s).padStart(2,'0');
+  },1000);
 })();
 </script></body></html>
