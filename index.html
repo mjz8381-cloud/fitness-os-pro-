@@ -186,6 +186,29 @@
   .permbox{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--elev);
     border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin-bottom:12px}
 
+  /* ---------- lock / paywall overlay ---------- */
+  .lockwrap{position:relative;min-height:60vh}
+  .lockblur{filter:blur(7px) saturate(60%);opacity:.55;pointer-events:none;user-select:none;
+    max-height:78vh;overflow:hidden}
+  .lockcard{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:88%;max-width:340px;
+    background:linear-gradient(180deg,rgba(27,32,43,.97),rgba(21,25,34,.97));
+    border:1.5px solid rgba(201,255,87,.35);border-radius:18px;padding:24px 20px;text-align:center;
+    box-shadow:0 20px 60px -20px rgba(0,0,0,.8);z-index:5}
+
+  /* ---------- AI coach chat ---------- */
+  .chatlog{display:flex;flex-direction:column;gap:10px;padding:6px 2px 14px}
+  .msg{max-width:82%;padding:10px 13px;border-radius:14px;font-size:13.5px;line-height:1.7}
+  .msg.me{align-self:flex-end;background:var(--lime);color:#0c1206;border-bottom-left-radius:4px}
+  .msg.ai{align-self:flex-start;background:var(--card2);border:1px solid var(--line);border-bottom-right-radius:4px}
+  .chatinputrow{position:sticky;bottom:calc(64px + env(safe-area-inset-bottom));display:flex;gap:8px;
+    padding:8px 0;background:linear-gradient(0deg,var(--bg) 60%,transparent)}
+  .chatinputrow input{flex:1}
+  .creditbar{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--faint2);
+    padding:0 2px;margin-bottom:8px}
+
+  /* ---------- admin panel ---------- */
+  .adminrow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 4px}
+
   /* ---------- motion / glass / ripple / skeleton ---------- */
   .btn,.nb,.ib,.opt,.bell,.tb{position:relative;overflow:hidden}
   .ripple{position:absolute;border-radius:50%;background:rgba(255,255,255,.5);
@@ -283,8 +306,34 @@ let sb=null;
 try{ if(CLOUD_ENABLED) sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY); }catch(e){ console.error('Supabase init failed:',e); }
 
 let sbUser=null, guestMode=false, syncState='idle', authMode='login', authErr='';
-let sbIsPro=false; // حالة الاشتراك الجايه من السحابة — لسه مفيش دفع فعلي، الديفولت false للجميع
-function isPro(){ return CLOUD_ENABLED && sbUser && sbIsPro; }
+let sbIsPro=false;      // حالة الاشتراك الفعلي (بعد الدفع الحقيقي لاحقًا)
+let sbIsAdmin=false;    // صلاحية إدارية — بتتقرأ من عمود is_admin في قاعدة البيانات
+let sbTrialStart=null;  // تاريخ بدء التجربة المجانية (ISO string) أو null لو لسه ما بدأتش
+let sbLockOverride=null;// null = وضع افتراضي (تجربة/اشتراك)، true = الأدمن قفل كل حاجة يدويًا، false = الأدمن فتح كل حاجة يدويًا لأي مستخدم
+const TRIAL_DAYS=1;
+let aiCreditsDaily=0, aiCreditsMonthly=0, aiCreditsResetDate=null;
+const AI_DAILY_LIMIT=20, AI_MONTHLY_LIMIT=300; // حدود مبدئية، تقدر تتعدل من لوحة الأدمن لاحقًا
+
+function trialActive(){
+  if(!sbTrialStart) return false;
+  const started=new Date(sbTrialStart);
+  const diffDays=(Date.now()-started.getTime())/86400000;
+  return diffDays<TRIAL_DAYS;
+}
+function trialDaysLeft(){
+  if(!sbTrialStart) return 0;
+  const started=new Date(sbTrialStart);
+  const diffDays=(Date.now()-started.getTime())/86400000;
+  return Math.max(0,+(TRIAL_DAYS-diffDays).toFixed(2));
+}
+// isPro: هل المستخدم عنده وصول كامل للتطبيق؟ (اشتراك حقيقي، أو تجربة سارية، أو الأدمن فاتح كل حاجة يدويًا)
+function isPro(){
+  if(!CLOUD_ENABLED||!sbUser) return false;
+  if(sbIsAdmin) return true; // الأدمن دايمًا عنده وصول كامل لنفسه
+  if(sbLockOverride===false) return true; // الأدمن فاتح كل حاجة لكل المستخدمين
+  if(sbLockOverride===true) return false; // الأدمن قافل كل حاجة لكل المستخدمين (حتى التجربة)
+  return sbIsPro || trialActive();
+}
 
 /* ============ EXERCISE DATABASE ============
 fields: id, name, muscle, pattern, equipment, level(1=beg,2=int,3=adv), type(c=compound,i=isolation),
@@ -590,7 +639,7 @@ function defaultNotifSettings(){return{
 function blank(){return{
   profile:null, program:null, workoutLogs:[], foodLogs:[], metrics:[], prs:[], customFoods:[],
   weekTasks:{0:[],1:[],2:[],3:[],4:[],5:[],6:[]}, restDaysCustom:null, gymTimePref:{},
-  notifSettings:defaultNotifSettings(), notifLog:[]
+  notifSettings:defaultNotifSettings(), notifLog:[], aiChat:[]
 };}
 
 async function load(){
@@ -621,6 +670,7 @@ function hydrateState(){
     if(S.notifSettings.enabled===undefined)S.notifSettings.enabled=true;
   }
   if(!S.notifLog)S.notifLog=[];
+  if(!S.aiChat)S.aiChat=[];
 }
 async function save(){
   try{
@@ -650,25 +700,66 @@ function queueCloudSave(){
 async function cloudPull(){
   if(!CLOUD_ENABLED||!sbUser) return false;
   try{
-    const {data,error}=await sb.from('app_state').select('data,is_pro').eq('user_id',sbUser.id).maybeSingle();
+    const {data,error}=await sb.from('app_state')
+      .select('data,is_pro,is_admin,trial_started_at,ai_credits_daily,ai_credits_monthly,ai_credits_reset_date')
+      .eq('user_id',sbUser.id).maybeSingle();
     if(error) throw error;
     if(data){
       sbIsPro=!!data.is_pro;
+      sbIsAdmin=!!data.is_admin;
+      sbTrialStart=data.trial_started_at||null;
+      aiCreditsDaily=data.ai_credits_daily||0;
+      aiCreditsMonthly=data.ai_credits_monthly||0;
+      aiCreditsResetDate=data.ai_credits_reset_date||null;
       if(data.data&&Object.keys(data.data).length){ S=data.data; hydrateState(); }
+      await ensureTrialStarted();
+      await maybeResetCredits();
       return true;
     }
   }catch(e){/* offline or first login — keep local state */}
   return false;
 }
-// حالة الاشتراك بتتقرا لوحدها من غير ما تتبعت مع كل حفظ —
-// عشان المستخدم من عنده (client) ميقدرش يغيّرها، غير من خلال RLS/دفع فعلي لاحقًا
-async function refreshProStatus(){
-  if(!CLOUD_ENABLED||!sbUser) return;
+// أول ما يسجل المستخدم دخول لأول مرة، لو التجربة لسه ما بدأتش، تتسجل تلقائيًا من هنا
+async function ensureTrialStarted(){
+  if(!CLOUD_ENABLED||!sbUser||sbTrialStart) return;
   try{
-    const {data,error}=await sb.from('app_state').select('is_pro').eq('user_id',sbUser.id).maybeSingle();
-    if(!error&&data) sbIsPro=!!data.is_pro;
+    sbTrialStart=new Date().toISOString();
+    await sb.from('app_state').update({trial_started_at:sbTrialStart}).eq('user_id',sbUser.id);
   }catch(e){}
 }
+// الكريدت اليومي بيتصفر كل يوم جديد، والشهري كل شهر جديد
+async function maybeResetCredits(){
+  if(!CLOUD_ENABLED||!sbUser) return;
+  const ds=today();
+  const curMonth=ds.slice(0,7);
+  const lastMonth=aiCreditsResetDate?aiCreditsResetDate.slice(0,7):null;
+  let changed=false;
+  if(aiCreditsResetDate!==ds){ aiCreditsDaily=0; changed=true; }
+  if(lastMonth!==curMonth){ aiCreditsMonthly=0; changed=true; }
+  if(changed){
+    aiCreditsResetDate=ds;
+    try{ await sb.from('app_state').update({ai_credits_daily:aiCreditsDaily,ai_credits_monthly:aiCreditsMonthly,ai_credits_reset_date:ds}).eq('user_id',sbUser.id); }catch(e){}
+  }
+}
+async function consumeAiCredit(){
+  aiCreditsDaily++; aiCreditsMonthly++;
+  try{ await sb.from('app_state').update({ai_credits_daily:aiCreditsDaily,ai_credits_monthly:aiCreditsMonthly}).eq('user_id',sbUser.id); }catch(e){}
+}
+async function pullAppSettings(){
+  if(!CLOUD_ENABLED) return;
+  try{
+    const {data,error}=await sb.from('app_settings').select('lock_override').eq('id',1).maybeSingle();
+    if(!error&&data) sbLockOverride=data.lock_override;
+  }catch(e){}
+}
+async function setAppLockOverride(val){
+  if(!CLOUD_ENABLED||!sbIsAdmin) return;
+  try{
+    await sb.from('app_settings').update({lock_override:val,updated_at:new Date().toISOString()}).eq('id',1);
+    sbLockOverride=val;
+  }catch(e){ toast('حصل خطأ في الحفظ'); }
+}
+// ملحوظة: refreshProStatus اتدمجت جوه cloudPull، عشان تجيب كل حالة الاشتراك/الأدمن/التجربة/الكريدت في نداء واحد
 function updateSyncBadge(){
   const el=document.getElementById('syncDot'); if(!el) return;
   el.className='syncdot '+syncState;
@@ -676,6 +767,7 @@ function updateSyncBadge(){
 }
 async function initCloud(){
   if(!CLOUD_ENABLED) return;
+  await pullAppSettings();
   // Handle email confirmation redirect: Supabase appends tokens to the URL hash
   // or a ?code= param after the user clicks the confirmation link
   try{
@@ -1230,6 +1322,12 @@ function progressEngine(period){
   return {period,cur,training,nutrition,body,consistency,goal};
 }
 /* ================= ROUTER ================= */
+const FREE_TABS=['home']; // التبويبات دي دايمًا متاحة حتى من غير Pro/تجربة
+function tabLocked(t){
+  if(!CLOUD_ENABLED||!sbUser) return false; // ضيف/بدون سحاب: كل حاجة متاحة زي زمان
+  if(FREE_TABS.includes(t)) return false;
+  return !isPro();
+}
 let lastRenderedTab=null;
 function render(){
   const v=document.getElementById('view');
@@ -1262,14 +1360,34 @@ function render(){
   document.getElementById('streakVal').textContent=streak();
   document.querySelectorAll('.nb').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));
   updateSyncBadge();
-  v.innerHTML = tab==='ex'?renderExDetail():tab==='notif'?renderNotif():tab==='progress'?renderProgress():tab==='home'?renderHome():tab==='plan'?renderPlan():tab==='food'?renderFood():tab==='log'?renderLog():renderMe();
+  const locked=tabLocked(tab);
+  const pageHtml = tab==='ex'?renderExDetail():tab==='notif'?renderNotif():tab==='progress'?renderProgress():tab==='home'?renderHome():tab==='plan'?renderPlan():tab==='food'?renderFood():tab==='log'?renderLog():tab==='ai'?renderAiCoach():tab==='admin'?renderAdmin():renderMe();
+  v.innerHTML = locked?renderLockedOverlay(pageHtml):pageHtml;
   // only jump to top when actually switching to a different page — in-place
   // updates (adding a task, picking a type, saving a set...) keep your scroll spot
   if(tab!==lastRenderedTab){ window.scrollTo(0,0); playPageEnter(v); }
   updateNavIndicator();
-  animateRings();
+  if(!locked) animateRings();
   lastRenderedTab=tab;
 }
+function renderLockedOverlay(underneathHtml){
+  const trial=trialActive();
+  const daysLeft=trialDaysLeft();
+  return `<div class="lockwrap">
+    <div class="lockblur">${underneathHtml}</div>
+    <div class="lockcard">
+      <div style="font-size:34px;margin-bottom:8px">🔒</div>
+      <div style="font-weight:800;font-size:16px;margin-bottom:6px">الجزء ده لأعضاء Pro بس</div>
+      <div class="dd" style="margin-bottom:14px;line-height:1.8">
+        ${sbTrialStart?'فترتك التجريبية خلصت — اشترك في Pro عشان تفتح البرنامج والتغذية والسجل والـ AI Coach.'
+          :'جرّب Pro مجانًا يوم كامل، وبعدين اشترك عشان تفضل مفتوح.'}
+      </div>
+      ${!sbTrialStart?`<button class="btn p blk" data-a="starttrial">ابدأ تجربة يوم مجاني 🎁</button>`
+        :`<button class="btn p blk" data-a="go" data-t="me">عرض باقة Pro</button>`}
+    </div>
+  </div>`;
+}
+
 function playPageEnter(v){ v.classList.remove('page-enter'); void v.offsetWidth; v.classList.add('page-enter'); }
 const reducedMotion=()=>window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 function animateRings(){
@@ -1354,7 +1472,8 @@ async function doAuthSubmit(mode){
 }
 async function doLogout(){
   try{ if(sb) await sb.auth.signOut(); }catch(e){}
-  sbUser=null; guestMode=false; sbIsPro=false; render();
+  sbUser=null; guestMode=false; sbIsPro=false; sbIsAdmin=false; sbTrialStart=null;
+  aiCreditsDaily=0; aiCreditsMonthly=0; aiCreditsResetDate=null; render();
 }
 
 /* ================= ONBOARDING ================= */
@@ -2055,6 +2174,85 @@ function renderProgress(){
 }
 
 
+/* ================= AI COACH ================= */
+// ملاحظة: لسه مفيش مفتاح API حقيقي متربط. الدالة دي بترجع رد "تجريبي" (mock)
+// عشان نقدر نبني ونجرب الشات والكريدت كامل، ولما يتحدد مزوّد الـ AI (Claude/OpenAI)
+// هنستبدل جسم الدالة دي بنداء حقيقي لـ Supabase Edge Function اللي هتخبي المفتاح.
+const AI_SYSTEM_SCOPE=`إنت مساعد داخل تطبيق Fitness OS Pro بس. بترد على أسئلة عن: برنامج التمرين، التغذية، السجل والتقدم، مواعيد الجدول. أي سؤال برّه النطاق ده، اعتذر بلطف ووجّه المستخدم يسأل حاجة متعلقة بالتطبيق.`;
+async function fakeAiReply(userMsg){
+  await new Promise(r=>setTimeout(r,650)); // محاكاة زمن استجابة حقيقي
+  const msg=userMsg.toLowerCase();
+  if(/تمرين|حصة|برنامج|عضل/.test(userMsg)){
+    const dow=new Date().getDay(); const sess=sessionFor(dow);
+    if(sess&&!sess.rest) return `حصة النهارده هي "${sess.name}" وبتستهدف ${sess.groups.join(' + ')}. عندك ${sess.exercises.length} تمارين، تقدر تفتح تبويب البرنامج وتشوفهم بالتفصيل. عايزني أساعدك في حاجة تانية عن التمرين؟`;
+    return `النهارده يوم راحة في برنامجك — مفيش حصة مجدولة. الراحة جزء أساسي من التقدم 💪`;
+  }
+  if(/اكل|تغذي|بروتين|سعر/.test(userMsg)){
+    const t=targetFor(today()), tot=foodTotals(today());
+    return `هدفك النهارده ${t.kcal} سعرة و${t.protein}جم بروتين. لحد دلوقتي سجّلت ${tot.k} سعرة و${tot.p}جم بروتين. متبقي ${Math.max(0,t.kcal-tot.k)} سعرة. تقدر تفتح تبويب التغذية عشان تشوف خطة مقترحة.`;
+  }
+  if(/معاد|جدول|موعد/.test(userMsg)){
+    return `تقدر تدير جدولك وتحدد ميعاد الجيم من تبويب "حسابي" تحت قسم الجدول الأسبوعي. عايزني أفكّرك بحاجة معينة؟`;
+  }
+  return `(رد تجريبي — لسه مفيش AI حقيقي متربط) سؤالك كان: "${userMsg}". لما نربط مفتاح API هرد عليك بتفصيل أكتر بناءً على بياناتك الفعلية في التطبيق.`;
+}
+function aiCreditsLeft(){ return {daily:Math.max(0,AI_DAILY_LIMIT-aiCreditsDaily),monthly:Math.max(0,AI_MONTHLY_LIMIT-aiCreditsMonthly)}; }
+function renderAiCoach(){
+  const left=aiCreditsLeft();
+  const log=S.aiChat||[];
+  const msgs=log.length?log.map(m=>`<div class="msg ${m.role==='user'?'me':'ai'}">${m.text}</div>`).join('')
+    :`<div class="empty"><div class="b">🤖</div>اسألني أي حاجة عن برنامجك، أكلك، أو جدولك</div>`;
+  return `<button class="btn g sm" data-a="go" data-t="me" style="margin:6px 0 12px">‹ رجوع</button>
+  <div class="st">🤖 AI Coach <span class="tag">تجريبي — بيتظبط قريب</span></div>
+  <div class="creditbar"><span>رصيدك النهارده: ${left.daily}/${AI_DAILY_LIMIT}</span><span>الشهر ده: ${left.monthly}/${AI_MONTHLY_LIMIT}</span></div>
+  <div class="chatlog" id="chatlog">${msgs}</div>
+  <div class="chatinputrow">
+    <input id="ai_input" type="text" placeholder="اسأل عن التمرين، الأكل، أو الجدول..." onkeydown="if(event.key==='Enter')act('aisend')">
+    <button class="btn p sm" data-a="aisend">إرسال</button>
+  </div>`;
+}
+async function sendAiMessage(){
+  const inputEl=document.getElementById('ai_input');
+  const text=inputEl?inputEl.value.trim():'';
+  if(!text) return;
+  const left=aiCreditsLeft();
+  if(left.daily<=0){ toast('خلص رصيدك اليومي من الـ AI Coach — هيتجدد بكرة'); return; }
+  if(left.monthly<=0){ toast('خلص رصيدك الشهري من الـ AI Coach'); return; }
+  if(!S.aiChat) S.aiChat=[];
+  S.aiChat.push({role:'user',text});
+  render();
+  const reply=await fakeAiReply(text);
+  S.aiChat.push({role:'ai',text:reply});
+  await consumeAiCredit();
+  await save();
+  render();
+  setTimeout(()=>{ const cl=document.getElementById('chatlog'); if(cl) cl.scrollTop=cl.scrollHeight; },50);
+}
+
+/* ================= ADMIN PANEL ================= */
+function renderAdmin(){
+  if(!sbIsAdmin) return `<div class="card"><div class="empty">الصفحة دي للأدمن بس</div></div>`;
+  const ov=sbLockOverride;
+  return `<button class="btn g sm" data-a="go" data-t="me" style="margin:6px 0 12px">‹ رجوع</button>
+  <div class="st">⚙️ لوحة تحكم الأدمن</div>
+  <div class="card">
+    <div class="dd" style="margin-bottom:10px">تحكم عام يطبّق على كل المستخدمين فورًا:</div>
+    <div class="adminrow"><span>الوضع الافتراضي (تجربة/اشتراك طبيعي)</span>
+      <button class="btn ${ov===null?'p':'g'} sm" data-a="setlock" data-v="null">تفعيل</button></div>
+    <div class="adminrow"><span>فتح كل حاجة للجميع 🔓</span>
+      <button class="btn ${ov===false?'p':'g'} sm" data-a="setlock" data-v="false">تفعيل</button></div>
+    <div class="adminrow"><span>قفل كل حاجة للجميع 🔒</span>
+      <button class="btn ${ov===true?'p':'g'} sm" data-a="setlock" data-v="true">تفعيل</button></div>
+  </div>
+  <div class="st">حالتك الحالية</div>
+  <div class="card">
+    <div class="li"><div><div class="n">Admin</div></div><span class="chip c-lime">✅ مفعّل</span></div>
+    <div class="li"><div><div class="n">Pro</div></div><span class="chip ${sbIsPro?'c-lime':''}">${sbIsPro?'✅':'—'}</span></div>
+    <div class="li"><div><div class="n">تجربة مجانية</div></div><span class="chip">${sbTrialStart?(trialActive()?'سارية':'خلصت'):'لسه ما بدأتش'}</span></div>
+  </div>
+  <div class="dd" style="padding:0 4px">لتفعيل Pro لمستخدم معين يدويًا: روح Supabase → Table Editor → app_state → دوّر على المستخدم بالإيميل وغيّر is_pro لـ true.</div>`;
+}
+
 function renderMe(){
   const p=S.profile, t=macroTargets();
   const bmi=+(p.weight/Math.pow(p.height/100,2)).toFixed(1);
@@ -2070,24 +2268,32 @@ function renderMe(){
         <button class="btn p sm blk" style="margin-top:11px" data-a="authshow">تسجيل الدخول</button>
       `}
     </div>`;
+  const trialBadge=sbTrialStart&&trialActive()?` • تجربة مجانية (متبقي ${trialDaysLeft()<1?Math.round(trialDaysLeft()*24)+' ساعة':Math.round(trialDaysLeft())+' يوم'})`:'';
   const proCard=(!CLOUD_ENABLED||!sbUser)?'':isPro()?`<div class="st">⭐ العضوية</div>
     <div class="card" style="border-color:rgba(201,255,87,.3)">
-      <div class="row"><div><div style="font-weight:700;font-size:13.5px">عضو Pro ⭐</div>
-        <div class="dd" style="margin-top:3px">كل الفيتشرز متاحة ليك بالكامل</div></div>
-        <span class="chip c-lime">Pro</span></div>
+      <div class="row"><div><div style="font-weight:700;font-size:13.5px">${sbIsAdmin?'أدمن ⚙️':sbIsPro?'عضو Pro ⭐':'تجربة مجانية 🎁'}</div>
+        <div class="dd" style="margin-top:3px">كل الفيتشرز متاحة ليك بالكامل${trialBadge}</div></div>
+        <span class="chip c-lime">${sbIsAdmin?'Admin':'Pro'}</span></div>
     </div>`:`<div class="st">⭐ ترقية الحساب</div>
     <div class="card" style="border-color:rgba(201,255,87,.3)">
       <div style="font-weight:700;font-size:14.5px;margin-bottom:6px">Fitness OS Pro ⭐</div>
       <div class="dd" style="line-height:1.9;margin-bottom:12px">
-        • توليد برامج تمرين وخطط أكل غير محدودة<br>
+        • برنامج تمرين وخطة أكل كاملة<br>
         • تتبع تقدم وإحصائيات متقدمة<br>
-        • تخصيص كامل للتمارين والوجبات<br>
+        • AI Coach يجاوبك على أسئلتك<br>
         • دعم مباشر وتحديثات مبكرة
       </div>
-      <button class="btn p blk" data-a="upgradepro">الترقية للـ Pro (قريبًا)</button>
-      <div style="font-size:10.5px;color:var(--faint2);margin-top:8px;text-align:center">نظام الدفع لسه بيتجهز — هيتفعل قريب</div>
+      ${!sbTrialStart?`<button class="btn p blk" data-a="starttrial">جرّب مجانًا يوم كامل 🎁</button>`
+        :`<button class="btn p blk" data-a="upgradepro">الترقية للـ Pro (قريبًا)</button>
+      <div style="font-size:10.5px;color:var(--faint2);margin-top:8px;text-align:center">نظام الدفع لسه بيتجهز — هيتفعل قريب</div>`}
     </div>`;
-  return cloudCard+proCard+`<div class="card">
+  const aiCard=(!CLOUD_ENABLED||!sbUser)?'':`<div class="st">🤖 AI Coach</div>
+    <div class="card"><div class="row"><div><div style="font-weight:700;font-size:13.5px">اسأل مدربك الذكي</div>
+      <div class="dd" style="margin-top:3px">عن التمرين، التغذية، أو جدولك</div></div>
+      <button class="btn ${isPro()?'p':'g'} sm" data-a="go" data-t="ai">افتح 💬</button></div></div>`;
+  const adminCard=sbIsAdmin?`<div class="st">⚙️ إدارة</div>
+    <div class="card"><button class="btn g blk" data-a="go" data-t="admin">لوحة تحكم الأدمن</button></div>`:'';
+  return cloudCard+proCard+aiCard+adminCard+`<div class="card">
     <div class="row"><strong style="font-size:14px">بياناتك</strong>
     <span class="chip c-lime">${GOALS[p.goal].label}</span></div>
     <div class="div"></div>
@@ -2136,6 +2342,16 @@ async function act(a,d,el){
   if(a==='authshow'){guestMode=false;render();return;}
   if(a==='authlogout'){await doLogout();return;}
   if(a==='upgradepro'){toast('نظام الدفع لسه بيتجهز — قريب هيبقى متاح 🚀');return;}
+  if(a==='starttrial'){
+    if(!CLOUD_ENABLED||!sbUser){toast('لازم تسجّل دخول الأول');return;}
+    await ensureTrialStarted();toast('اتفعلت تجربتك المجانية ليوم كامل 🎁');render();return;
+  }
+  if(a==='aisend'){await sendAiMessage();return;}
+  if(a==='setlock'){
+    if(!sbIsAdmin)return;
+    const v=d.v==='null'?null:d.v==='true';
+    await setAppLockOverride(v);toast('اتحفظ الإعداد وهيتطبق على كل المستخدمين');render();return;
+  }
   if(a==='ob'){ob[d.k]=d.v;obStep++;render();return;}
   if(a==='obdays'){ob.daysPerWeek=+d.n;ob.split=d.sp;obStep++;render();return;}
   if(a==='obback'){obStep=Math.max(0,obStep-1);render();return;}
