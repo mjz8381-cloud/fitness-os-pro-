@@ -332,6 +332,9 @@
 /* ============ CLOUD SYNC (Supabase) ============ */
 const SUPABASE_URL='https://iiqjfvdtyzirqkcunmjb.supabase.co';
 const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpcWpmdmR0eXppcnFrY3VubWpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUxNzA3MjcsImV4cCI6MjEwMDc0NjcyN30.yOPop9sXLBUecM-sMYvieFB65apc8R7Xi5pmfVVggUE';
+// مفتاح VAPID العام لتفعيل Push حقيقي — القرين الخاص (السري) موجود بس في الـ Edge Function
+// (اتولّد مرة واحدة، متسجّل في DEPLOY_README.md — لو غيّرته لازم تغيّره في الاتنين مع بعض)
+const VAPID_PUBLIC_KEY='BOWLMaleqKgDIbrK2_MxVbMW7AEGO9_u38PyqaoW54-hdyD6WGZ4YpO455pL5PuM4MUscj1IzegIawtmROn6lho';
 const CLOUD_ENABLED = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('YOUR_') && typeof window.supabase!=='undefined';
 let sb=null;
 try{ if(CLOUD_ENABLED) sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY); }catch(e){ console.error('Supabase init failed:',e); }
@@ -342,7 +345,7 @@ let sbIsAdmin=false;    // صلاحية إدارية — بتتقرأ من عم�
 let sbTrialStart=null;  // تاريخ بدء التجربة المجانية (ISO string) أو null لو لسه ما بدأتش
 let sbLockOverride=null;// null = وضع افتراضي (تجربة/اشتراك)، true = الأدمن قفل كل حاجة يدويًا، false = الأدمن فتح كل حاجة يدويًا لأي مستخدم
 const TRIAL_DAYS=1;
-let aiCreditsDaily=0, aiCreditsMonthly=0, aiCreditsResetDate=null;
+let aiCreditsDailyLeft=null, aiCreditsMonthlyLeft=null; // null = لسه ما اتقرأش من السيرفر
 const AI_DAILY_LIMIT=20, AI_MONTHLY_LIMIT=300; // حدود مبدئية، تقدر تتعدل من لوحة الأدمن لاحقًا
 
 function trialActive(){
@@ -743,19 +746,16 @@ async function cloudPull(){
   if(!CLOUD_ENABLED||!sbUser) return false;
   try{
     const {data,error}=await sb.from('app_state')
-      .select('data,is_pro,is_admin,trial_started_at,ai_credits_daily,ai_credits_monthly,ai_credits_reset_date')
+      .select('data,is_pro,is_admin,trial_started_at')
       .eq('user_id',sbUser.id).maybeSingle();
     if(error) throw error;
     if(data){
       sbIsPro=!!data.is_pro;
       sbIsAdmin=!!data.is_admin;
       sbTrialStart=data.trial_started_at||null;
-      aiCreditsDaily=data.ai_credits_daily||0;
-      aiCreditsMonthly=data.ai_credits_monthly||0;
-      aiCreditsResetDate=data.ai_credits_reset_date||null;
       if(data.data&&Object.keys(data.data).length){ S=data.data; hydrateState(); }
       await ensureTrialStarted();
-      await maybeResetCredits();
+      await refreshAiCreditsFromServer();
       return true;
     }
   }catch(e){/* offline or first login — keep local state */}
@@ -769,23 +769,20 @@ async function ensureTrialStarted(){
     await sb.from('app_state').update({trial_started_at:sbTrialStart}).eq('user_id',sbUser.id);
   }catch(e){}
 }
-// الكريدت اليومي بيتصفر كل يوم جديد، والشهري كل شهر جديد
-async function maybeResetCredits(){
+// الكريدت بقى بيتحسب ويتصفر (يومي/شهري) جوه Postgres بس، عن طريق get_ai_credits()/consume_ai_credit()
+// (شوف supabase/sql/001_ai_credits_server_side.sql) — المتصفح ما بيقدرش يكتب في الأعمدة دي خالص،
+// فمفيش طريقة إن حد يعدّل رصيده من devtools أو من ساعة جهازه.
+async function refreshAiCreditsFromServer(){
   if(!CLOUD_ENABLED||!sbUser) return;
-  const ds=today();
-  const curMonth=ds.slice(0,7);
-  const lastMonth=aiCreditsResetDate?aiCreditsResetDate.slice(0,7):null;
-  let changed=false;
-  if(aiCreditsResetDate!==ds){ aiCreditsDaily=0; changed=true; }
-  if(lastMonth!==curMonth){ aiCreditsMonthly=0; changed=true; }
-  if(changed){
-    aiCreditsResetDate=ds;
-    try{ await sb.from('app_state').update({ai_credits_daily:aiCreditsDaily,ai_credits_monthly:aiCreditsMonthly,ai_credits_reset_date:ds}).eq('user_id',sbUser.id); }catch(e){}
-  }
-}
-async function consumeAiCredit(){
-  aiCreditsDaily++; aiCreditsMonthly++;
-  try{ await sb.from('app_state').update({ai_credits_daily:aiCreditsDaily,ai_credits_monthly:aiCreditsMonthly}).eq('user_id',sbUser.id); }catch(e){}
+  try{
+    const {data,error}=await sb.rpc('get_ai_credits');
+    if(error) throw error;
+    const row=Array.isArray(data)?data[0]:data;
+    if(row){
+      aiCreditsDailyLeft=row.daily_left;
+      aiCreditsMonthlyLeft=row.monthly_left;
+    }
+  }catch(e){ /* أوفلاين — نسيب آخر قيمة معروفة على الشاشة */ }
 }
 async function pullAppSettings(){
   if(!CLOUD_ENABLED) return;
@@ -892,10 +889,46 @@ async function requestNotifPermission(){
   if(typeof Notification==='undefined'){toast('المتصفح ده مش بيدعم إشعارات النظام — هتوصلك جوه التطبيق بس');return;}
   try{
     const p=await Notification.requestPermission();
-    if(p==='granted'){toast('تم تفعيل الإشعارات 🔔');scheduleToday();}
+    if(p==='granted'){
+      toast('تم تفعيل الإشعارات 🔔');
+      scheduleToday();
+      await ensurePushSubscription(); // يفعّل Push حقيقي — هيوصلك حتى لو التطبيق مقفول
+    }
     else if(p==='denied'){toast('اتقفلت الإشعارات من إعدادات المتصفح');}
     render();
   }catch(e){toast('مش قادر أطلب إذن الإشعارات دلوقتي');}
+}
+
+/* ---------- Push حقيقي عن طريق service worker (بيشتغل حتى والتطبيق مقفول) ---------- */
+function urlBase64ToUint8Array(base64String){
+  const padding='='.repeat((4-base64String.length%4)%4);
+  const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');
+  const raw=atob(base64);
+  const arr=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) arr[i]=raw.charCodeAt(i);
+  return arr;
+}
+async function registerServiceWorker(){
+  if(!('serviceWorker' in navigator)) return null;
+  try{ return await navigator.serviceWorker.register('/sw.js'); }
+  catch(e){ console.error('SW register failed',e); return null; }
+}
+async function ensurePushSubscription(){
+  if(!CLOUD_ENABLED||!sb||!sbUser) return;
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)) return;
+  if(typeof Notification==='undefined'||Notification.permission!=='granted') return;
+  try{
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub){
+      sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)});
+    }
+    const j=sub.toJSON();
+    if(!j.endpoint||!j.keys) return;
+    await sb.from('push_subscriptions').upsert({
+      user_id:sbUser.id, endpoint:j.endpoint, p256dh:j.keys.p256dh, auth:j.keys.auth
+    },{onConflict:'endpoint'});
+  }catch(e){ console.error('push subscribe failed',e); }
 }
 
 function pushSysNotification(title,body){
@@ -932,6 +965,23 @@ function scheduleAtMinutes(mins,cb){
   notifTimers.push(id);
 }
 function scheduleAtHHMM(hhmm,cb){ scheduleAtMinutes(toMin(hhmm),cb); }
+function targetDateForMinutes(mins){
+  if(mins==null||isNaN(mins)) return null;
+  const now=new Date(); const target=new Date(now); target.setHours(0,0,0,0); target.setMinutes(mins);
+  return target;
+}
+// بتكتب الإشعار في جدول scheduled_notifications على السيرفر، عشان edge function تبعته
+// كـ Push حقيقي في وقته حتى لو التطبيق مقفول أو الموبايل مطفي الشاشة.
+// المحتوى بيتحسب دلوقتي (وقت الجدولة) — نفس الإشعار وهو ظاهر جوه التطبيق (foreground)
+// بيفضل بيتحسب لحظة إطلاقه بالظبط زي ما كان قبل كده، فهو أدق دايمًا.
+async function queueServerNotif(dedupeKey,title,body,fireAtDate){
+  if(!CLOUD_ENABLED||!sb||!sbUser||!fireAtDate||fireAtDate<=new Date()) return;
+  try{
+    await sb.from('scheduled_notifications').upsert({
+      user_id:sbUser.id, dedupe_key:dedupeKey, title, body, fire_at:fireAtDate.toISOString(), sent:false
+    },{onConflict:'user_id,dedupe_key'});
+  }catch(e){ /* أوفلاين — الإشعار جوه التطبيق (لما يكون مفتوح) لسه هيشتغل عادي */ }
+}
 
 function nextMealForCat(cat){
   const ds=today(), pool=allFoods();
@@ -945,10 +995,15 @@ function nextMealForCat(cat){
   }
   return pool.filter(m=>m.cat===cat)[0]||null;
 }
-function maybeFireMealNotif(cat){
+function buildMealNotif(cat){
   const m=nextMealForCat(cat);
-  if(!m) return;
-  fireNotif('meal',`🍽 حان وقت ${cat}`,`اقتراح: ${m.name} — ${m.kcal} سعرة، ${m.p}جم بروتين`,{key:cat+':'+today(),mealId:m.id,cat});
+  if(!m) return null;
+  return {key:cat+':'+today(),title:`🍽 حان وقت ${cat}`,body:`اقتراح: ${m.name} — ${m.kcal} سعرة، ${m.p}جم بروتين`,mealId:m.id};
+}
+function maybeFireMealNotif(cat){
+  const b=buildMealNotif(cat);
+  if(!b) return;
+  fireNotif('meal',b.title,b.body,{key:b.key,mealId:b.mealId,cat});
 }
 
 function ingredientsFor(meals){
@@ -956,7 +1011,7 @@ function ingredientsFor(meals){
   meals.forEach(m=>(m.ing||'').split('،').forEach(i=>{const s=i.trim();if(s)set.add(s);}));
   return [...set];
 }
-function fireTomorrowPrepNotif(){
+function buildTomorrowPrepNotif(){
   const now=new Date(); const tmr=new Date(now); tmr.setDate(tmr.getDate()+1);
   const dsT=dstr(tmr), dowT=tmr.getDay();
   const training=isTrainingDay(dsT);
@@ -979,28 +1034,41 @@ function fireTomorrowPrepNotif(){
     ingList=ingredientsFor(meals);
   }catch(e){}
   const ingBody=ingList.length?(' — جهّز: '+ingList.slice(0,6).join('، ')+(ingList.length>6?'…':'')):'';
-  fireNotif('tomorrow',title,body+ingBody,{key:dsT,exercises:exNames,meals:mealNames,ingredients:ingList,training});
+  return {key:dsT,title,body:body+ingBody,exercises:exNames,meals:mealNames,ingredients:ingList,training};
+}
+function fireTomorrowPrepNotif(){
+  const b=buildTomorrowPrepNotif();
+  fireNotif('tomorrow',b.title,b.body,{key:b.key,exercises:b.exercises,meals:b.meals,ingredients:b.ingredients,training:b.training});
 }
 
-function fireDailyLogNotif(){
+function buildDailyLogNotif(){
   const ds=today();
   const hasWorkout=S.workoutLogs.some(l=>l.date===ds);
   const hasFood=S.foodLogs.some(l=>l.date===ds);
-  if(hasWorkout&&hasFood) return;
+  if(hasWorkout&&hasFood) return null;
   let body='لسه ما سجلتش ';
   if(!hasWorkout&&!hasFood) body+='تمرين ولا أكل النهارده';
   else if(!hasWorkout) body+='تمرين النهارده';
   else body+='أكل النهارده';
-  fireNotif('dailylog','📋 فاكر تسجّل يومك؟',body,{key:ds});
+  return {key:ds,title:'📋 فاكر تسجّل يومك؟',body};
+}
+function fireDailyLogNotif(){
+  const b=buildDailyLogNotif();
+  if(!b) return;
+  fireNotif('dailylog',b.title,b.body,{key:b.key});
 }
 
-function fireGymNotif(){
+function buildGymNotif(){
   const ds=today(), dow=new Date().getDay();
   const pref=S.gymTimePref&&S.gymTimePref[dow];
   const sess=sessionFor(dow);
-  if(!pref||pref.start==null) return;
-  fireNotif('gym','🏋️ ميعاد الجيم قرّب',
-    `معادك الساعة ${fmtHM(pref.start)}${sess?' — '+sess.name:''}`,{key:ds+':'+pref.start});
+  if(!pref||pref.start==null) return null;
+  return {key:ds+':'+pref.start,title:'🏋️ ميعاد الجيم قرّب',body:`معادك الساعة ${fmtHM(pref.start)}${sess?' — '+sess.name:''}`};
+}
+function fireGymNotif(){
+  const b=buildGymNotif();
+  if(!b) return;
+  fireNotif('gym',b.title,b.body,{key:b.key});
 }
 
 function scheduleToday(){
@@ -1012,16 +1080,27 @@ function scheduleToday(){
   if(ns.gym.enabled&&isTrainingDay(ds)){
     const pref=S.gymTimePref&&S.gymTimePref[dow];
     if(pref&&pref.start!=null){
-      scheduleAtMinutes(pref.start-ns.gym.minsBefore, fireGymNotif);
+      const mins=pref.start-ns.gym.minsBefore;
+      scheduleAtMinutes(mins,fireGymNotif);
+      const b=buildGymNotif(); if(b) queueServerNotif('gym:'+b.key,b.title,b.body,targetDateForMinutes(mins));
     }
   }
   if(ns.meals.enabled){
     Object.entries(ns.meals.categories).forEach(([cat,cfg])=>{
-      if(cfg.enabled&&cfg.hasTime&&cfg.time) scheduleAtHHMM(cfg.time,()=>maybeFireMealNotif(cat));
+      if(cfg.enabled&&cfg.hasTime&&cfg.time){
+        scheduleAtHHMM(cfg.time,()=>maybeFireMealNotif(cat));
+        const b=buildMealNotif(cat); if(b) queueServerNotif('meal:'+b.key,b.title,b.body,targetDateForMinutes(toMin(cfg.time)));
+      }
     });
   }
-  if(ns.dailyLog.enabled) scheduleAtHHMM(ns.dailyLog.time, fireDailyLogNotif);
-  if(ns.tomorrowPrep.enabled) scheduleAtHHMM(ns.tomorrowPrep.time, fireTomorrowPrepNotif);
+  if(ns.dailyLog.enabled){
+    scheduleAtHHMM(ns.dailyLog.time,fireDailyLogNotif);
+    const b=buildDailyLogNotif(); if(b) queueServerNotif('dailylog:'+b.key,b.title,b.body,targetDateForMinutes(toMin(ns.dailyLog.time)));
+  }
+  if(ns.tomorrowPrep.enabled){
+    scheduleAtHHMM(ns.tomorrowPrep.time,fireTomorrowPrepNotif);
+    const b=buildTomorrowPrepNotif(); queueServerNotif('tomorrow:'+b.key,b.title,b.body,targetDateForMinutes(toMin(ns.tomorrowPrep.time)));
+  }
 
   // re-run the whole scheduler right after midnight for the new day
   const now=new Date(); const midnight=new Date(now); midnight.setHours(24,0,10,0);
@@ -1552,7 +1631,7 @@ async function doAuthSubmit(mode){
 async function doLogout(){
   try{ if(sb) await sb.auth.signOut(); }catch(e){}
   sbUser=null; guestMode=false; sbIsPro=false; sbIsAdmin=false; sbTrialStart=null;
-  aiCreditsDaily=0; aiCreditsMonthly=0; aiCreditsResetDate=null; render();
+  aiCreditsDailyLeft=null; aiCreditsMonthlyLeft=null; render();
 }
 
 /* ================= ONBOARDING ================= */
@@ -2173,9 +2252,9 @@ function renderProgress(){
 
 
 /* ================= AI COACH ================= */
-// ملاحظة: لسه مفيش مفتاح API حقيقي متربط. الدالة دي بترجع رد "تجريبي" (mock)
-// عشان نقدر نبني ونجرب الشات والكريدت كامل، ولما يتحدد مزوّد الـ AI (Claude/OpenAI)
-// هنستبدل جسم الدالة دي بنداء حقيقي لـ Supabase Edge Function اللي هتخبي المفتاح.
+// النداء الحقيقي بيروح لـ Supabase Edge Function اسمها ai-chat، وهي اللي بتكلم
+// Anthropic API فعليًا (المفتاح مخبّى في متغيرات بيئة السيرفر، مش هنا خالص)،
+// وهي كمان اللي بتستهلك الكريدت من قاعدة البيانات (شوف supabase/functions/ai-chat).
 const AI_SYSTEM_SCOPE=`إنت مدرب شخصي داخل تطبيق Fitness OS Pro، ودود ومحفّز وواثق من نفسه، وعارف عن العميل أكتر من أي مدرب بشري لأنك شايف كل بياناته الفعلية أول بأول: تمرينه، أكله، وزنه، جدوله، والتزامه. بترد بأسلوب شخصي ودافئ مبني على أرقامه هو بالظبط — مش نصايح عامة. بترد على أسئلة عن: برنامج التمرين، التغذية، السجل والتقدم، مواعيد الجدول. أي سؤال برّه النطاق ده، اعتذر بلطف ووجّه المستخدم يسأل حاجة متعلقة بالتطبيق. خليك مختصر جدًا: رد بحوالي 30 كلمة أو أقل في العادي، وزوّد بس لو السؤال فعلاً محتاج تفصيل أو خطوات.`;
 function buildAiContext(){
   const ds=today(), dow=new Date().getDay();
@@ -2204,19 +2283,26 @@ function capWords(s,n){
   return words.length<=n?s:words.slice(0,n).join(' ')+'…';
 }
 async function callAiCoach(system,messages,max_tokens){
-  try{
-    const r=await fetch('/api/ai-chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({system,messages,max_tokens})});
-    if(r.ok){ const d=await r.json(); if(d.text) return d.text; }
-  }catch(e){ /* /api/ai-chat not deployed here (e.g. this preview) — try window.claude.complete */ }
-  if(window.claude&&window.claude.complete) return await window.claude.complete({system,messages,max_tokens});
-  throw new Error('no AI backend available');
+  if(!CLOUD_ENABLED||!sb||!sbUser) throw Object.assign(new Error('cloud_unavailable'),{code:'cloud_unavailable'});
+  const {data,error}=await sb.functions.invoke('ai-chat',{body:{system,messages,max_tokens}});
+  if(error){
+    let payload=null;
+    try{ payload=error.context&&typeof error.context.json==='function'?await error.context.json():null; }catch(e){}
+    if(payload&&payload.error==='out_of_credits'){
+      if(typeof payload.daily_left==='number') aiCreditsDailyLeft=payload.daily_left;
+      if(typeof payload.monthly_left==='number') aiCreditsMonthlyLeft=payload.monthly_left;
+      throw Object.assign(new Error('out_of_credits'),{code:'out_of_credits'});
+    }
+    throw error;
+  }
+  if(data&&typeof data.daily_left==='number') aiCreditsDailyLeft=data.daily_left;
+  if(data&&typeof data.monthly_left==='number') aiCreditsMonthlyLeft=data.monthly_left;
+  if(data&&data.text) return data.text;
+  throw new Error('empty AI response');
 }
-async function fakeAiReply(userMsg){
-  try{
-    const text=await callAiCoach(AI_SYSTEM_SCOPE+'\n\n'+buildAiContext(),[{role:'user',content:userMsg}],400);
-    if(text&&text.trim()) return sanitizeAiText(text.trim());
-  }catch(e){ /* fall through to offline canned replies below */ }
-  await new Promise(r=>setTimeout(r,650)); // محاكاة زمن استجابة حقيقي
+// رد احتياطي محلي بسيط — بيتفعّل بس لو الاتصال بالسيرفر نفسه فشل (أوفلاين مثلاً)،
+// ومش بيتفعّل أبدًا لو السبب إن الرصيد خلص، عشان محدش يقدر يلف على حد الكريدت.
+function offlineFallbackReply(userMsg){
   const msg=userMsg.toLowerCase();
   if(/تمرين|حصة|برنامج|عضل/.test(userMsg)){
     const dow=new Date().getDay(); const sess=sessionFor(dow);
@@ -2240,7 +2326,7 @@ async function fakeAiReply(userMsg){
     const st=streak();
     return `عندك ${st} يوم ستريك دلوقتي — ده مجهود حقيقي مش سهل. لو حاسس متعب، يوم راحة إضافي مش هيضرّك — بس حاول ما تسيبش كتير يوم ورا بعض. أنا هفضل اتفق معاك مش أدفعك.`;
   }
-  return `سؤالك كان "${userMsg}" — أنا شايف كل بياناتك في التطبيق وهقدر أجاوبك بتفصيل أكتر لما نربط مفتاح API حقيقي قريبًا. اسألني عن التمرين، الأكل، الوزن، أو الستريك دلوقتي وهجاوبك فورًا.`;
+  return `مش قادر أوصل للسيرفر دلوقتي (ممكن يكون النت مقطوع). جرّب تاني بعد شوية — اسألني عن التمرين، الأكل، الوزن، أو الستريك.`;
 }
 function updateTrialPill(){
   const el=document.getElementById('trialPill');
@@ -2332,7 +2418,13 @@ function maybeShowDailyPopup(){
   if(S.coachDaily&&S.coachDaily.popupShown===today()) return;
   setTimeout(showDailyPopup,1400);
 }
-function aiCreditsLeft(){ return {daily:Math.max(0,AI_DAILY_LIMIT-aiCreditsDaily),monthly:Math.max(0,AI_MONTHLY_LIMIT-aiCreditsMonthly)}; }
+function aiCreditsLeft(){
+  return {
+    daily: aiCreditsDailyLeft==null?AI_DAILY_LIMIT:aiCreditsDailyLeft,
+    monthly: aiCreditsMonthlyLeft==null?AI_MONTHLY_LIMIT:aiCreditsMonthlyLeft,
+    known: aiCreditsDailyLeft!=null
+  };
+}
 function renderAiCoach(){
   const left=aiCreditsLeft();
   const log=S.aiChat||[];
@@ -2365,6 +2457,7 @@ function renderAiCoach(){
   <div class="creditbar">
     <span><span style="color:var(--faint2)">📅 النهاردة</span> <b style="color:var(--tx)">${left.daily}</b>/${AI_DAILY_LIMIT}</span>
     <span><span style="color:var(--faint2)">🗓️ الشهر</span> <b style="color:var(--tx)">${left.monthly}</b>/${AI_MONTHLY_LIMIT}</span>
+    ${!left.known?'<span style="color:var(--faint2)">⏳ بيتحدّث...</span>':''}
   </div>
   <div class="chatlog" id="chatlog">${msgs}</div>
   <div class="chatinputrow">
@@ -2379,15 +2472,29 @@ async function sendAiMessage(){
   const inputEl=document.getElementById('ai_input');
   const text=inputEl?inputEl.value.trim():'';
   if(!text) return;
-  const left=aiCreditsLeft();
-  if(left.daily<=0){ toast('خلص رصيدك اليومي من الـ AI Coach — هيتجدد بكرة'); return; }
-  if(left.monthly<=0){ toast('خلص رصيدك الشهري من الـ AI Coach'); return; }
+  // فحص تفاؤلي سريع بس (تجربة استخدام أفضل) — الفحص الحقيقي والملزم بيحصل في السيرفر
+  const optimistic=aiCreditsLeft();
+  if(optimistic.known&&optimistic.daily<=0){ toast('خلص رصيدك اليومي من الـ AI Coach — هيتجدد بكرة'); return; }
+  if(optimistic.known&&optimistic.monthly<=0){ toast('خلص رصيدك الشهري من الـ AI Coach'); return; }
   if(!S.aiChat) S.aiChat=[];
   S.aiChat.push({role:'user',text});
+  if(inputEl) inputEl.value='';
   render();
-  const reply=await fakeAiReply(text);
+  let reply;
+  try{
+    const raw=await callAiCoach(AI_SYSTEM_SCOPE+'\n\n'+buildAiContext(),[{role:'user',content:text}],400);
+    reply=sanitizeAiText(raw.trim());
+  }catch(e){
+    if(e&&e.code==='out_of_credits'){
+      S.aiChat.pop(); // اتشالت من الشات لأنه ما اتبعتش فعليًا — ما استهلكش كريدت
+      render();
+      const left=aiCreditsLeft();
+      toast(left.daily<=0?'خلص رصيدك اليومي من الـ AI Coach — هيتجدد بكرة':'خلص رصيدك الشهري من الـ AI Coach');
+      return;
+    }
+    reply=offlineFallbackReply(text);
+  }
   S.aiChat.push({role:'ai',text:reply});
-  await consumeAiCredit();
   await save();
   render();
   setTimeout(()=>{ const cl=document.getElementById('chatlog'); if(cl) cl.scrollTop=cl.scrollHeight; },50);
@@ -2739,8 +2846,10 @@ setInterval(applySkyTheme,5*60*1000);
 (async function(){
   renderSkeleton();
   applySkyTheme();
+  registerServiceWorker(); // عشان الإشعارات تشتغل حتى لو التطبيق مقفول
   await load();
   if(CLOUD_ENABLED) await initCloud();
+  await ensurePushSubscription(); // لو الإذن كان اتاخد قبل كده، نتأكد إن الاشتراك موجود في السيرفر
   render();
   scheduleToday();
   maybeShowDailyPopup();
