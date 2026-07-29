@@ -1593,7 +1593,8 @@ function renderAuth(){
     <div class="logo" style="font-size:23px;margin-bottom:2px"><span class="dot"></span>Fitness OS Pro</div>
     <p class="lead">☁️ سجّل دخولك عشان بياناتك تتزامن أوتوماتيك على كل أجهزتك</p>
     <div class="card">
-      <label class="f">الإيميل<input id="au_email" type="email" placeholder="you@example.com" autocomplete="email"></label>
+      <label class="f">${isSignup?'الإيميل':'الإيميل أو رقم الموبايل'}<input id="au_email" type="${isSignup?'email':'text'}" placeholder="${isSignup?'you@example.com':'you@example.com أو 01012345678'}" autocomplete="${isSignup?'email':'username'}"></label>
+      ${isSignup?`<label class="f">رقم الموبايل<input id="au_phone" type="tel" placeholder="01012345678" autocomplete="tel"></label>`:''}
       <label class="f">كلمة السر<input id="au_pass" type="password" placeholder="••••••••" autocomplete="${isSignup?'new-password':'current-password'}"></label>
       ${authErr?`<div style="color:${authErr.startsWith('✅')?'var(--lime)':'var(--coral)'};font-size:12.5px;margin:6px 0 10px;line-height:1.7;padding:10px;background:${authErr.startsWith('✅')?'rgba(201,255,87,.08)':'rgba(255,107,107,.08)'};border-radius:10px">${authErr}</div>`:''}
       <button class="btn p blk" data-a="authsubmit" data-mode="${authMode}">${isSignup?'إنشاء حساب':'تسجيل الدخول'}</button>
@@ -1602,14 +1603,37 @@ function renderAuth(){
     <button class="btn g blk" data-a="authskip" style="margin-top:4px">تخطي — استخدم محليًا بدون مزامنة</button>
   </div>`;
 }
+function normalizePhone(p){
+  // بيشيل مسافات وشرطات، وبيحوّل صيغة 01xxxxxxxxx المصرية لصيغة دولية +20xxxxxxxxxx
+  // لو رقمك مش مصري، غيّر السطر ده حسب كود بلدك
+  let s=(p||'').trim().replace(/[\s-]/g,'');
+  if(/^01[0-9]{9}$/.test(s)) s='+2'+s;
+  return s;
+}
+async function resolveEmailFromIdentifier(identifier){
+  if(identifier.includes('@')) return identifier;
+  if(!CLOUD_ENABLED||!sb) return null;
+  try{
+    const {data,error}=await sb.functions.invoke('phone-login-lookup',{body:{phone:normalizePhone(identifier)}});
+    if(error||!data||!data.email) return null;
+    return data.email;
+  }catch(e){ console.error('[phone-login-lookup] failed:',e); return null; }
+}
 async function doAuthSubmit(mode){
-  const email=V('au_email'),pass=V('au_pass');
-  if(!email||!pass){authErr='اكتب الإيميل وكلمة السر';render();return;}
+  const idOrEmail=V('au_email'),pass=V('au_pass');
+  const rawPhone=mode==='signup'?V('au_phone'):'';
+  if(!idOrEmail||!pass){authErr='اكتب الإيميل وكلمة السر';render();return;}
+  if(mode==='signup'&&!rawPhone){authErr='اكتب رقم الموبايل';render();return;}
+  if(mode==='signup'&&!/^01[0-9]{9}$/.test(rawPhone.trim())){authErr='اكتب رقم موبايل مصري صحيح (01xxxxxxxxx)';render();return;}
   if(pass.length<6){authErr='كلمة السر لازم 6 حروف على الأقل';render();return;}
   authErr='';
   try{
     if(mode==='signup'){
-      const {data,error}=await sb.auth.signUp({email,password:pass});
+      const normPhone=normalizePhone(rawPhone);
+      // فحص مبدئي: الرقم ده متسجل قبل كده؟
+      const existing=await resolveEmailFromIdentifier(normPhone);
+      if(existing){authErr='رقم الموبايل ده متسجل بحساب قبل كده — جرب سجّل دخول';render();return;}
+      const {data,error}=await sb.auth.signUp({email:idOrEmail,password:pass,options:{data:{phone:normPhone}}});
       if(error) throw error;
       // Supabase returns a user but no session when email confirmation is required
       if(data.user&&!data.session){
@@ -1619,6 +1643,8 @@ async function doAuthSubmit(mode){
         toast('اتعمل الحساب ✅');
       }
     }else{
+      const email=await resolveEmailFromIdentifier(idOrEmail.trim());
+      if(!email){authErr='الإيميل أو رقم الموبايل غلط';render();return;}
       const {error}=await sb.auth.signInWithPassword({email,password:pass});
       if(error) throw error;
       toast('أهلًا بيك 👋');
@@ -1626,7 +1652,7 @@ async function doAuthSubmit(mode){
   }catch(e){
     const msg=e.message||'';
     if(msg.includes('Invalid login')||msg.includes('invalid_credentials'))
-      authErr='الإيميل أو كلمة السر غلط';
+      authErr='الإيميل/الموبايل أو كلمة السر غلط';
     else if(msg.includes('already registered')||msg.includes('already been registered'))
       authErr='الإيميل ده متسجل قبل كده — جرب سجّل دخول';
     else if(msg.includes('Email not confirmed'))
