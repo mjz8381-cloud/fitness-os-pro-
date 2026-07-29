@@ -334,7 +334,7 @@ const SUPABASE_URL='https://iiqjfvdtyzirqkcunmjb.supabase.co';
 const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlpcWpmdmR0eXppcnFrY3VubWpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUxNzA3MjcsImV4cCI6MjEwMDc0NjcyN30.yOPop9sXLBUecM-sMYvieFB65apc8R7Xi5pmfVVggUE';
 // مفتاح VAPID العام لتفعيل Push حقيقي — القرين الخاص (السري) موجود بس في الـ Edge Function
 // (اتولّد مرة واحدة، متسجّل في DEPLOY_README.md — لو غيّرته لازم تغيّره في الاتنين مع بعض)
-const VAPID_PUBLIC_KEY='BOWLMaleqKgDIbrK2_MxVbMW7AEGO9_u38PyqaoW54-hdyD6WGZ4YpO455pL5PuM4MUscj1IzegIawtmROn6lho';
+const VAPID_PUBLIC_KEY='BKUlI-DE4IGdVxJqpMmKbebpeVd3aKFCje-bJpJRMcLp9gW97zfpr42aKe9x_VBmTWGr_FpGlG-ErVbuH1-N6Is';
 const CLOUD_ENABLED = SUPABASE_URL.startsWith('http') && !SUPABASE_ANON_KEY.startsWith('YOUR_') && typeof window.supabase!=='undefined';
 let sb=null;
 try{ if(CLOUD_ENABLED) sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY); }catch(e){ console.error('Supabase init failed:',e); }
@@ -909,9 +909,17 @@ function urlBase64ToUint8Array(base64String){
   return arr;
 }
 async function registerServiceWorker(){
-  if(!('serviceWorker' in navigator)) return null;
-  try{ return await navigator.serviceWorker.register('/sw.js'); }
-  catch(e){ console.error('SW register failed',e); return null; }
+  if(!('serviceWorker' in navigator)){ console.warn('[sw] serviceWorker not supported in this browser'); return null; }
+  try{
+    const reg=await navigator.serviceWorker.register('/sw.js');
+    console.log('[sw] registered OK, scope:',reg.scope);
+    return reg;
+  }catch(e){
+    // لو ده ظهر، ده معناه إن ملف /sw.js مش موجود أو مش متعمله deploy على السيرفر —
+    // افتح https://YOUR-DOMAIN/sw.js في المتصفح مباشرة، المفروض تشوف كود جافاسكريبت مش صفحة 404
+    console.error('[sw] register FAILED — check that /sw.js is deployed at your site root:',e);
+    return null;
+  }
 }
 async function ensurePushSubscription(){
   if(!CLOUD_ENABLED||!sb||!sbUser) return;
@@ -2283,11 +2291,19 @@ function capWords(s,n){
   return words.length<=n?s:words.slice(0,n).join(' ')+'…';
 }
 async function callAiCoach(system,messages,max_tokens){
-  if(!CLOUD_ENABLED||!sb||!sbUser) throw Object.assign(new Error('cloud_unavailable'),{code:'cloud_unavailable'});
+  if(!CLOUD_ENABLED||!sb||!sbUser){
+    console.error('[ai-chat] blocked before call — CLOUD_ENABLED:',CLOUD_ENABLED,'sb:',!!sb,'sbUser:',!!sbUser);
+    throw Object.assign(new Error('cloud_unavailable'),{code:'cloud_unavailable'});
+  }
   const {data,error}=await sb.functions.invoke('ai-chat',{body:{system,messages,max_tokens}});
   if(error){
-    let payload=null;
+    let payload=null,rawText=null,status=null;
+    try{ status=error.context&&error.context.status; }catch(e){}
+    try{ rawText=error.context&&typeof error.context.text==='function'?await error.context.clone().text():null; }catch(e){}
     try{ payload=error.context&&typeof error.context.json==='function'?await error.context.json():null; }catch(e){}
+    // اطبع كل حاجة نعرفها عن الخطأ في الكونسول — ده اللي هيوريك السبب الحقيقي
+    // (افتح Developer Tools > Console وابعتلي اللي هيظهر هنا لما تسأل سؤال)
+    console.error('[ai-chat] invoke failed:',{message:error.message,status,payload,rawText,error});
     if(payload&&payload.error==='out_of_credits'){
       if(typeof payload.daily_left==='number') aiCreditsDailyLeft=payload.daily_left;
       if(typeof payload.monthly_left==='number') aiCreditsMonthlyLeft=payload.monthly_left;
@@ -2298,6 +2314,7 @@ async function callAiCoach(system,messages,max_tokens){
   if(data&&typeof data.daily_left==='number') aiCreditsDailyLeft=data.daily_left;
   if(data&&typeof data.monthly_left==='number') aiCreditsMonthlyLeft=data.monthly_left;
   if(data&&data.text) return data.text;
+  console.error('[ai-chat] empty response, data was:',data);
   throw new Error('empty AI response');
 }
 // رد احتياطي محلي بسيط — بيتفعّل بس لو الاتصال بالسيرفر نفسه فشل (أوفلاين مثلاً)،
@@ -2492,6 +2509,7 @@ async function sendAiMessage(){
       toast(left.daily<=0?'خلص رصيدك اليومي من الـ AI Coach — هيتجدد بكرة':'خلص رصيدك الشهري من الـ AI Coach');
       return;
     }
+    console.error('[ai-chat] falling back to canned reply because:',e);
     reply=offlineFallbackReply(text);
   }
   S.aiChat.push({role:'ai',text:reply});
